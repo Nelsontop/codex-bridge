@@ -77,6 +77,9 @@ CODEX_APPROVAL_POLICY=never
 CODEX_SKIP_GIT_REPO_CHECK=true
 MAX_CONCURRENT_TASKS=1
 MAX_REPLY_CHARS=1800
+FEISHU_STREAM_OUTPUT_ENABLED=true
+FEISHU_STREAM_COMMAND_STATUS_ENABLED=true
+FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS=1200
 ```
 
 ## 飞书侧配置
@@ -100,6 +103,8 @@ curl http://127.0.0.1:3000/healthz
 ```
 
 `CODEX_COMMAND` 可用于覆盖默认启动命令；未配置时才回退到 `CODEX_BIN` 或默认 `codex`。
+
+开启 `FEISHU_STREAM_OUTPUT_ENABLED=true` 后，桥接器会在任务执行过程中把中间 `agent_message` 和命令状态分段发回飞书。可用 `FEISHU_STREAM_COMMAND_STATUS_ENABLED` 控制是否发送命令开始/结束提示，用 `FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS` 控制最小推送间隔，避免刷屏。
 
 ## 测试记录
 

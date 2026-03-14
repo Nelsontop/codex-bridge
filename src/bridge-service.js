@@ -1,5 +1,9 @@
 import { runCodexTask } from "./codex-runner.js";
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function chatKeyFor(event) {
   return `${event.message.chat_type}:${event.message.chat_id}`;
 }
@@ -60,6 +64,14 @@ function helpText() {
     "",
     "其余文本会直接发送给 Codex 执行。"
   ].join("\n");
+}
+
+function truncateText(text, maxChars) {
+  const normalized = String(text || "").trim();
+  if (!normalized || normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }
 
 export class BridgeService {
@@ -218,15 +230,112 @@ export class BridgeService {
     }
   }
 
+  queueStreamText(task, chatId, text) {
+    const normalized = String(text || "").trim();
+    if (!normalized) {
+      return;
+    }
+
+    task.streamChain = task.streamChain
+      .then(async () => {
+        const now = Date.now();
+        const elapsed = now - task.lastStreamSentAt;
+        const waitMs = this.config.feishuStreamUpdateMinIntervalMs - elapsed;
+        if (waitMs > 0) {
+          await sleep(waitMs);
+        }
+
+        const chunks = splitText(normalized, this.config.maxReplyChars);
+        for (const chunk of chunks) {
+          await this.safeSend(chatId, chunk);
+        }
+        task.lastStreamSentAt = Date.now();
+      })
+      .catch((error) => {
+        console.error(`[task:${task.id}] stream send failed`, error);
+      });
+  }
+
+  handleRunnerEvent(task, chatId, event) {
+    if (!this.config.feishuStreamOutputEnabled || !event?.item) {
+      return;
+    }
+
+    const { item } = event;
+    if (item.type === "agent_message" && event.type === "item.completed") {
+      const text = String(item.text || "").trim();
+      if (!text || text === task.lastStreamedAgentMessage) {
+        return;
+      }
+
+      task.lastStreamedAgentMessage = text;
+      this.queueStreamText(
+        task,
+        chatId,
+        `任务 ${task.id} 进度更新：\n\n${text}`
+      );
+      return;
+    }
+
+    if (!this.config.feishuStreamCommandStatusEnabled || item.type !== "command_execution") {
+      return;
+    }
+
+    if (event.type === "item.started") {
+      if (task.startedCommandIds.has(item.id)) {
+        return;
+      }
+      task.startedCommandIds.add(item.id);
+      this.queueStreamText(
+        task,
+        chatId,
+        `任务 ${task.id} 正在执行命令：\n${truncateText(item.command, this.config.maxReplyChars)}`
+      );
+      return;
+    }
+
+    if (event.type === "item.completed") {
+      if (task.completedCommandIds.has(item.id)) {
+        return;
+      }
+      task.completedCommandIds.add(item.id);
+
+      const output = truncateText(
+        item.aggregated_output,
+        Math.max(200, this.config.maxReplyChars - 120)
+      );
+      const lines = [
+        `任务 ${task.id} 命令${item.exit_code === 0 ? "已完成" : "结束"}：`,
+        truncateText(item.command, this.config.maxReplyChars)
+      ];
+      if (item.exit_code !== null && item.exit_code !== undefined) {
+        lines.push(`exit: ${item.exit_code}`);
+      }
+      if (output) {
+        lines.push("", output);
+      }
+
+      this.queueStreamText(task, chatId, lines.join("\n"));
+    }
+  }
+
   async runTask(task) {
     task.status = "running";
     task.startedAt = new Date().toISOString();
+    task.streamChain = Promise.resolve();
+    task.lastStreamSentAt = 0;
+    task.lastStreamedAgentMessage = "";
+    task.startedCommandIds = new Set();
+    task.completedCommandIds = new Set();
 
     const chatId = task.event.message.chat_id;
     const conversation = this.store.getConversation(task.chatKey);
     const runner = runCodexTask(this.config, {
       prompt: task.prompt,
-      sessionId: conversation?.sessionId || null
+      sessionId: conversation?.sessionId || null,
+      onEvent: (event) => {
+        this.handleRunnerEvent(task, chatId, event);
+      }
     });
 
     task.runner = runner;
@@ -234,6 +343,7 @@ export class BridgeService {
 
     try {
       const result = await runner.result;
+      await task.streamChain;
       this.store.upsertConversation(task.chatKey, {
         sessionId: result.sessionId,
         lastTaskId: task.id,
@@ -245,14 +355,19 @@ export class BridgeService {
         headerLines.push(`session: ${result.sessionId}`);
       }
 
-      const chunks = splitText(
-        `${headerLines.join("\n")}\n\n${result.finalMessage}`,
-        this.config.maxReplyChars
-      );
+      const alreadyStreamedFinalMessage =
+        this.config.feishuStreamOutputEnabled &&
+        result.finalMessage.trim() &&
+        result.finalMessage.trim() === task.lastStreamedAgentMessage;
+      const finalText = alreadyStreamedFinalMessage
+        ? headerLines.join("\n")
+        : `${headerLines.join("\n")}\n\n${result.finalMessage}`;
+      const chunks = splitText(finalText, this.config.maxReplyChars);
       for (const chunk of chunks) {
         await this.safeSend(chatId, chunk);
       }
     } catch (error) {
+      await task.streamChain;
       await this.safeSend(
         chatId,
         `任务 ${task.id} 执行失败：\n${error.message || String(error)}`

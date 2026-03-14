@@ -201,6 +201,18 @@ export function loadConfig(rootDir = process.cwd()) {
     codexPrelude: process.env.CODEX_PRELUDE || DEFAULT_PRELUDE,
     maxConcurrentTasks: Math.max(1, asNumber(process.env.MAX_CONCURRENT_TASKS, 1)),
     maxReplyChars: Math.max(500, asNumber(process.env.MAX_REPLY_CHARS, 1800)),
-    taskAckEnabled: asBoolean(process.env.TASK_ACK_ENABLED, true)
+    taskAckEnabled: asBoolean(process.env.TASK_ACK_ENABLED, true),
+    feishuStreamOutputEnabled: asBoolean(
+      process.env.FEISHU_STREAM_OUTPUT_ENABLED,
+      false
+    ),
+    feishuStreamCommandStatusEnabled: asBoolean(
+      process.env.FEISHU_STREAM_COMMAND_STATUS_ENABLED,
+      true
+    ),
+    feishuStreamUpdateMinIntervalMs: Math.max(
+      0,
+      asNumber(process.env.FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS, 1200)
+    )
   };
 }
