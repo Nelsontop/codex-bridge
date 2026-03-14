@@ -4,6 +4,7 @@ import { StateStore } from "./state-store.js";
 import { FeishuClient } from "./feishu-client.js";
 import { BridgeService } from "./bridge-service.js";
 import { FeishuWsClient } from "./feishu-ws-client.js";
+import { buildMissingConfigGuide, runSetupWizard } from "./init-guide.js";
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -11,13 +12,31 @@ function sendJson(res, statusCode, payload) {
   res.end(`${JSON.stringify(payload)}\n`);
 }
 
-const config = loadConfig(process.cwd());
-const store = new StateStore(config.stateFile);
-const feishuClient = new FeishuClient(config);
-const bridge = new BridgeService(config, store, feishuClient);
-const wsClient = new FeishuWsClient(config, bridge);
-
 async function main() {
+  const command = process.argv[2] || "";
+  if (command === "setup" || command === "init") {
+    await runSetupWizard({ rootDir: process.cwd() });
+    return;
+  }
+
+  let config;
+  try {
+    config = loadConfig(process.cwd());
+  } catch (error) {
+    if (String(error.message || "").startsWith("Missing required environment variable:")) {
+      const missingKey = String(error.message).split(":").pop()?.trim() || "unknown";
+      console.error(buildMissingConfigGuide({ missingKey }));
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
+
+  const store = new StateStore(config.stateFile);
+  const feishuClient = new FeishuClient(config);
+  const bridge = new BridgeService(config, store, feishuClient);
+  const wsClient = new FeishuWsClient(config, bridge);
+
   if (config.enableHealthServer) {
     const server = http.createServer((req, res) => {
       if (req.method === "GET" && req.url === "/healthz") {

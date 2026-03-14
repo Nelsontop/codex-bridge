@@ -105,6 +105,16 @@ AUTO_COMMIT_MESSAGE_PREFIX="bridge: save"
 
 ## 运行
 
+首次配置可以先运行：
+
+```bash
+npm run setup
+```
+
+向导会交互式生成或补全 `.env`，并打印飞书后台需要勾选的配置步骤。若直接执行 `npm start` 但缺少必要配置，程序也会自动提示先运行 `npm run setup`。
+
+正常启动：
+
 ```bash
 npm start
 ```
