@@ -25,7 +25,9 @@ async function main() {
           ok: true,
           transport: "feishu-ws",
           ...bridge.getHealth(),
-          reconnect: wsClient.getReconnectInfo()
+          feishu: feishuClient.getMetrics(),
+          reconnect: wsClient.getReconnectInfo(),
+          ws: wsClient.getMetrics()
         });
         return;
       }
@@ -39,6 +41,7 @@ async function main() {
   }
 
   await wsClient.start();
+  await bridge.resumeRecoveredTasks();
   console.log(
     `[ws] feishu persistent connection started, working in ${config.codexWorkspaceDir}`
   );

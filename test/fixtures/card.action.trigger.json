@@ -1,0 +1,21 @@
+{
+  "header": {
+    "event_type": "card.action.trigger"
+  },
+  "event": {
+    "operator": {
+      "operator_id": {
+        "open_id": "ou_user_a"
+      }
+    },
+    "action": {
+      "value": {
+        "action": "abort",
+        "chatId": "oc_test_chat",
+        "chatKey": "p2p:oc_test_chat",
+        "replyToMessageId": "om_source_message_1",
+        "taskId": "T0002"
+      }
+    }
+  }
+}

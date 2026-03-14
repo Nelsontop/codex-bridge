@@ -1,0 +1,21 @@
+{
+  "header": {
+    "event_type": "im.message.receive_v1"
+  },
+  "event": {
+    "message": {
+      "chat_id": "oc_test_chat",
+      "chat_type": "p2p",
+      "content": "{\"text\":\"请检查当前项目状态\"}",
+      "message_id": "om_source_message_1",
+      "message_type": "text",
+      "mentions": []
+    },
+    "sender": {
+      "sender_id": {
+        "open_id": "ou_user_a"
+      },
+      "sender_type": "user"
+    }
+  }
+}

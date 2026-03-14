@@ -210,6 +210,18 @@ export function loadConfig(rootDir = process.cwd()) {
     stateDir,
     stateFile: path.join(stateDir, "state.json"),
     feishuBaseUrl: process.env.FEISHU_BASE_URL || "https://open.feishu.cn",
+    feishuRequestTimeoutMs: Math.max(
+      1000,
+      asNumber(process.env.FEISHU_REQUEST_TIMEOUT_MS, 10000)
+    ),
+    feishuRequestRetries: Math.max(
+      0,
+      asNumber(process.env.FEISHU_REQUEST_RETRIES, 2)
+    ),
+    feishuRequestRetryDelayMs: Math.max(
+      0,
+      asNumber(process.env.FEISHU_REQUEST_RETRY_DELAY_MS, 300)
+    ),
     feishuAppId: requireEnv("FEISHU_APP_ID"),
     feishuAppSecret: requireEnv("FEISHU_APP_SECRET"),
     feishuBotOpenId: process.env.FEISHU_BOT_OPEN_ID || "",
@@ -257,6 +269,14 @@ export function loadConfig(rootDir = process.cwd()) {
     feishuStreamUpdateMinIntervalMs: Math.max(
       0,
       asNumber(process.env.FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS, 1200)
+    ),
+    maxQueuedTasksPerChat: Math.max(
+      1,
+      asNumber(process.env.MAX_QUEUED_TASKS_PER_CHAT, 5)
+    ),
+    maxQueuedTasksPerUser: Math.max(
+      1,
+      asNumber(process.env.MAX_QUEUED_TASKS_PER_USER, 10)
     ),
     gitAutoCommitEnabled,
     gitAutoCommitMessagePrefix:

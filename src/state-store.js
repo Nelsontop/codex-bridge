@@ -1,10 +1,52 @@
 import fs from "node:fs";
 import path from "node:path";
 
+const MAX_INTERRUPTED_TASKS = 50;
+
 const EMPTY_STATE = {
-  version: 1,
-  conversations: {}
+  version: 2,
+  conversations: {},
+  runtime: {
+    interrupted: [],
+    nextTaskNumber: 1,
+    queue: [],
+    running: []
+  }
 };
+
+function normalizeTaskList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((task) => task && typeof task === "object")
+    .map((task) => ({
+      ...task
+    }));
+}
+
+function normalizeRuntime(runtime, recoveredAt) {
+  const nextTaskNumber = Math.max(1, Number(runtime?.nextTaskNumber) || 1);
+  const queue = normalizeTaskList(runtime?.queue);
+  const running = normalizeTaskList(runtime?.running);
+  const interrupted = [
+    ...normalizeTaskList(runtime?.interrupted),
+    ...running.map((task) => ({
+      ...task,
+      interruptedAt: recoveredAt,
+      lastErrorMessage:
+        task.lastErrorMessage || "服务重启时任务被中断，未自动继续执行。",
+      status: "interrupted"
+    }))
+  ].slice(-MAX_INTERRUPTED_TASKS);
+
+  return {
+    interrupted,
+    nextTaskNumber,
+    queue,
+    running: []
+  };
+}
 
 export class StateStore {
   constructor(filePath) {
@@ -24,10 +66,15 @@ export class StateStore {
 
     try {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
+      const recoveredAt = new Date().toISOString();
       this.state = {
-        version: 1,
-        conversations: parsed.conversations || {}
+        version: 2,
+        conversations: parsed.conversations || {},
+        runtime: normalizeRuntime(parsed.runtime, recoveredAt)
       };
+      if (parsed.version !== 2 || normalizeTaskList(parsed.runtime?.running).length > 0) {
+        this.save();
+      }
     } catch (error) {
       console.warn("[state] failed to load state file, recreating:", error.message);
       this.state = structuredClone(EMPTY_STATE);
@@ -63,5 +110,15 @@ export class StateStore {
 
   conversationCount() {
     return Object.keys(this.state.conversations).length;
+  }
+
+  getRuntimeSnapshot() {
+    return structuredClone(this.state.runtime);
+  }
+
+  saveRuntimeSnapshot(runtime) {
+    this.state.runtime = normalizeRuntime(runtime, new Date().toISOString());
+    this.save();
+    return this.getRuntimeSnapshot();
   }
 }

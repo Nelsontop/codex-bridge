@@ -41,12 +41,15 @@
 - 支持群聊中 `@机器人` 后发送文本
 - 支持聊天级别的会话恢复
 - 支持 reply-to-message，减少群聊串线
+- 支持共享卡片更新：任务接收、进度更新、完成/失败会收敛到同一张卡片
 - 支持带 `Abort` / `Reset Session` 按钮的消息卡片
 - 支持按会话映射不同工作目录
 - 支持任务结束后自动 Git 提交，再继续下一个任务
-- 支持串行任务队列
-- 支持 `/help`、`/status`、`/reset`、`/abort <任务号>`
-- 支持本地状态持久化到 `.codex-feishu-bridge/state.json`
+- 支持同一聊天内任务串行、不同聊天按配置并行
+- 支持 `/help`、`/status`、`/reset`、`/abort <任务号>`，其中 `/abort` 可终止运行中任务或取消排队任务
+- 支持本地状态持久化到 `.codex-feishu-bridge/state.json`，包含会话、任务编号、排队快照和重启中断任务
+- 支持按聊天和用户维度限制待处理任务数量
+- 健康检查会输出飞书 HTTP/WS 请求指标、重试和最近错误信息
 
 ## 已知限制
 
@@ -72,6 +75,9 @@ ENABLE_HEALTH_SERVER=true
 FEISHU_ALLOWED_OPEN_IDS=
 FEISHU_REPLY_TO_MESSAGE_ENABLED=true
 FEISHU_INTERACTIVE_CARDS_ENABLED=true
+FEISHU_REQUEST_TIMEOUT_MS=10000
+FEISHU_REQUEST_RETRIES=2
+FEISHU_REQUEST_RETRY_DELAY_MS=300
 
 CODEX_WORKSPACE_DIR=/home/jingqi/workspace/your-project
 CHAT_WORKSPACE_MAPPINGS="group:oc_xxx=/home/jingqi/workspace/project-a;group:oc_yyy=/home/jingqi/workspace/project-b"
@@ -87,6 +93,8 @@ MAX_REPLY_CHARS=1800
 FEISHU_STREAM_OUTPUT_ENABLED=true
 FEISHU_STREAM_COMMAND_STATUS_ENABLED=true
 FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS=1200
+MAX_QUEUED_TASKS_PER_CHAT=5
+MAX_QUEUED_TASKS_PER_USER=10
 AUTO_COMMIT_AFTER_TASK_ENABLED=true
 AUTO_COMMIT_MESSAGE_PREFIX="bridge: save"
 ```
@@ -114,11 +122,19 @@ curl http://127.0.0.1:3000/healthz
 
 `CODEX_COMMAND` 可用于覆盖默认启动命令；未配置时才回退到 `CODEX_BIN` 或默认 `codex`。
 
-开启 `FEISHU_STREAM_OUTPUT_ENABLED=true` 后，桥接器会在任务执行过程中把中间 `agent_message` 和命令状态分段发回飞书。可用 `FEISHU_STREAM_COMMAND_STATUS_ENABLED` 控制是否发送命令开始/结束提示，用 `FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS` 控制最小推送间隔，避免刷屏。
+开启 `FEISHU_STREAM_OUTPUT_ENABLED=true` 后，桥接器会把中间 `agent_message` 和命令状态更新到同一张任务卡片。可用 `FEISHU_STREAM_COMMAND_STATUS_ENABLED` 控制是否展示命令开始/结束提示，用 `FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS` 控制最小更新间隔，避免刷屏。
 
-开启 `FEISHU_REPLY_TO_MESSAGE_ENABLED=true` 后，桥接器会回复到原消息。开启 `FEISHU_INTERACTIVE_CARDS_ENABLED=true` 后，任务接收和 `/status` 会返回带 `Abort` / `Reset Session` 按钮的交互卡片。
+开启 `FEISHU_REPLY_TO_MESSAGE_ENABLED=true` 后，桥接器会回复到原消息。开启 `FEISHU_INTERACTIVE_CARDS_ENABLED=true` 后，任务接收、进度和完成状态会复用同一张共享卡片；`/status` 也会返回交互卡片。
 
 `CHAT_WORKSPACE_MAPPINGS` 支持用 `chatKey=/abs/path` 或 `chat_id=/abs/path` 按会话映射工作目录，条目之间用分号分隔。开启 `AUTO_COMMIT_AFTER_TASK_ENABLED=true` 后，桥接器会在每个任务结束后先执行自动提交，再继续下一个任务；因此会强制串行执行任务。
+
+`FEISHU_REQUEST_TIMEOUT_MS`、`FEISHU_REQUEST_RETRIES` 和 `FEISHU_REQUEST_RETRY_DELAY_MS` 用于控制飞书 HTTP 请求的超时和重试。`MAX_QUEUED_TASKS_PER_CHAT`、`MAX_QUEUED_TASKS_PER_USER` 用于限制待处理任务数量，防止单个聊天或用户积压过多任务。
+
+运行测试：
+
+```bash
+npm test
+```
 
 ## 测试记录
 
@@ -129,6 +145,6 @@ curl http://127.0.0.1:3000/healthz
 
 ## 建议的后续版本
 
-- 增加共享卡片更新，把任务状态收敛到同一张卡片
 - 增加更细粒度的工作目录路由规则，例如按用户或按消息前缀切换
 - 增加自动 push / PR 工作流，但应和自动 commit 解耦
+- 增加任务历史查询与卡片归档能力，便于跨重启追踪执行结果
