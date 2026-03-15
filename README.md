@@ -1,10 +1,99 @@
 # Codex Feishu Bridge
 
-一个本地桥接服务：通过飞书长连接接收机器人消息，把文本消息转成 `codex exec` / `codex exec resume` 任务，再把结果发回飞书。
+一个运行在本地机器上的桥接服务：通过飞书长连接接收机器人事件，把聊天消息转成 `codex exec` / `codex exec resume` 任务，再把执行进度和结果发回飞书。
+
+它适合这样的场景：
+
+- 你希望在飞书里直接驱动本机上的 Codex CLI
+- 你希望按聊天维度复用 Codex session，而不是每条消息都开新上下文
+- 你希望群组能绑定到固定工作目录，并在首次绑定时顺手初始化 Git / GitHub 仓库
 
 # 效果图
 <img width="2517" height="806" alt="image" src="https://github.com/Nelsontop/codex-bridge/blob/b802debeeca947a03f005a3648fd01cdcb441261/pic/cfe03db6-19f3-4cc3-ba80-402ed1ee3fb2.png" />
 <img width="1517" height="1106" alt="image" src="https://github.com/Nelsontop/codex-bridge/blob/d20e09171799b781fca3bf99d72693db9c5c8474/pic/7b78cae5-aa1e-4053-81e9-6a103fab4e49.png" />
+
+## 你会得到什么
+
+- 私聊或群聊里通过文本直接下发 Codex 任务
+- 同一聊天自动复用 Codex session
+- 群聊首次接入后，先通过 `/bind <工作目录> [仓库名]` 绑定固定工作目录
+- 绑定时自动准备本地 Git 仓库，并尝试通过已登录的 `gh` CLI 创建 GitHub 公共仓库
+- 任务过程通过飞书共享卡片持续更新，支持 `/abort`、`/retry`、`/reset`
+- 本地持久化聊天状态、排队任务、上下文记忆和重启恢复信息
+- 可选任务完成后自动 Git 提交
+
+## 适用前提
+
+- Node.js 18.18 或更高版本
+- 本机已安装 `codex`
+- 已有一个飞书企业自建应用，并能开启机器人能力
+- 如果要自动创建 GitHub 公共仓库，本机还需要安装并登录 `gh`
+
+## 3 分钟上手
+
+### 1. 安装依赖
+
+```bash
+npm install
+```
+
+### 2. 生成 `.env`
+
+```bash
+npm run setup
+```
+
+向导会生成或补全项目根目录下的 `.env`。
+
+### 3. 在飞书后台完成订阅配置
+
+至少开启这些项：
+
+1. 机器人能力
+2. 事件 `im.message.receive_v1`
+3. 事件 `im.chat.member.bot.added_v1`
+4. 卡片按钮回调事件
+5. 订阅方式选择“使用长连接接收事件/回调”
+
+### 4. 启动服务
+
+```bash
+npm start
+```
+
+### 5. 验证健康检查
+
+默认端口示例：
+
+```bash
+curl http://127.0.0.1:3000/healthz
+```
+
+如果你在 `.env` 里改了 `PORT`，这里也要跟着改。
+
+### 6. 在飞书里验证
+
+- 私聊机器人，直接发送文本任务
+- 把机器人拉进群
+- 机器人第一次进群后会提示先执行 `/bind`
+- 在群里绑定成功后，再 `@机器人` 发送任务
+
+## 典型使用流程
+
+### 私聊
+
+1. 用户发送文本消息
+2. Bridge 创建或恢复这个私聊对应的 Codex session
+3. Codex 在默认工作目录执行任务
+4. 结果通过文本或卡片回到飞书
+
+### 群聊
+
+1. 机器人首次被拉进群，收到 `im.chat.member.bot.added_v1`
+2. Bridge 提示群里先执行 `/bind <工作目录> [仓库名]`
+3. `/bind` 成功后，把这个群与本地目录持久化绑定
+4. 这个群后续所有任务都固定在该目录执行
+5. `/reset` 只清空 session，不取消目录绑定
 
 ## 实现方案
 
@@ -108,153 +197,318 @@ sequenceDiagram
     end
 ```
 
-### 架构
+## 项目结构
 
-1. 本地服务启动后，先向飞书请求长连接 endpoint
-2. 服务通过 WebSocket 持久连接接收 `im.message.receive_v1` 事件
-3. 服务按聊天维度维护一个 Codex session
-4. 新聊天第一次调用 `codex exec`
-5. 同一聊天后续消息调用 `codex exec resume <sessionId>`
-6. 结果再通过飞书消息 API 发送回原 chat
+主要代码都在 `src/`：
 
-### 为什么这样做
+- `src/index.js`: 进程入口，启动配置、健康检查、飞书长连接
+- `src/bridge-service.js`: 事件分发、聊天路由、任务队列、命令处理、状态更新
+- `src/codex-runner.js`: 启动和取消 `codex exec`
+- `src/feishu-client.js`: 调飞书 HTTP API 发送消息、更新卡片
+- `src/feishu-ws-client.js`: 建立飞书长连接并分发事件
+- `src/state-store.js`: 持久化聊天状态和运行时快照
+- `src/workspace-binding.js`: `/bind` 目录绑定、Git 初始化、GitHub 仓库创建
+- `src/git-commit.js`: 可选自动提交与回滚
+- `src/init-guide.js`: `npm run setup` 初始化向导
 
-- 保留了“会话绑定”这一点，体验上接近 OpenClaw 的 thread-bound ACP
-- 不依赖额外网关、消息总线或数据库，能在当前空仓库里直接落地
-- 不需要公网 webhook 地址，启动本地进程后即可主动连飞书取事件
+持久化数据默认保存在：
 
-### 安全边界
+- `.codex-feishu-bridge/state.json`
+- `.codex-feishu-bridge/memory/`
+- `.codex-feishu-bridge/bridge.log`
 
-- Bridge 层会给 Codex 自动注入一段执行前导指令：除了删除类操作，其它任务默认直接执行；删除前必须确认
-- 可通过 `FEISHU_ALLOWED_OPEN_IDS` 限制允许使用桥接器的飞书用户
-- 默认使用 `CODEX_APPROVAL_POLICY=never` 和 `CODEX_SANDBOX=workspace-write`
+## 功能清单
 
-## 当前能力
+### 消息与会话
 
-- 支持飞书私聊文本消息
-- 支持群聊中 `@机器人` 后发送文本
-- 支持机器人首次进群时提示绑定工作目录
-- 支持聊天级别的会话恢复
-- 支持 reply-to-message，减少群聊串线
-- 支持共享卡片更新：任务接收、进度更新、完成/失败会收敛到同一张卡片
-- 支持带 `Abort` / `Reset Session` 按钮的消息卡片
-- 支持飞书消息事件和卡片动作的去重，避免平台重试或重复点击导致任务重复执行
-- 支持按会话映射不同工作目录，以及通过 `/bind <目录> [仓库名]` 为群组持久化绑定目录
-- 支持群组绑定时本地初始化 Git 仓库，并通过已登录的 `gh` CLI 创建 GitHub 公共仓库
-- 支持任务结束后自动 Git 提交，再继续下一个任务
-- 支持同一聊天内任务串行、不同聊天按配置并行
-- 支持 `/help`、`/bind`、`/status`、`/reset`、`/abort <任务号>`、`/retry [任务号]`
-- 任务卡片标题统一使用 `Txxx` 任务号，避免长摘要挤占标题空间
-- `/abort` 可终止运行中任务或取消排队任务，`/retry` 可重试当前聊天中的中断任务
-- 支持本地状态持久化到 `.codex-feishu-bridge/state.json`，包含会话、任务编号、排队快照和重启中断任务
-- 支持上下文占用接近上限时自动压缩会话记忆，落盘后在新会话中自动继续
-- 支持按聊天和用户维度限制待处理任务数量
-- 健康检查会输出飞书 HTTP/WS 请求指标、重试、最近错误信息和桥接侧任务统计
+- 支持私聊文本消息
+- 支持群聊 `@机器人` 文本消息
+- 支持按聊天维度复用 Codex session
+- 支持回复原消息，减少群聊串线
 
-## 已知限制
+### 群组绑定
 
-- 当前只处理文本消息
-- 文本回复虽然支持 reply 到原消息，但任务进度与结果主要通过共享卡片持续更新，不会为每次状态变化都新发一条消息
-- 当前依赖飞书后台已切到“使用长连接接收事件/回调”
+- 机器人首次进群时自动提示绑定目录
+- `/bind <工作目录> [仓库名]` 持久化绑定当前群目录
+- 后续群任务都强制使用该目录
+- 已有 `origin` 时沿用已有远端
 
-## 配置
+### 任务执行
 
-在项目根目录创建 `.env`：
+- 同一聊天串行执行，不同聊天按配置并行
+- 支持排队、取消、失败、中断恢复
+- 支持 `/abort <任务号>`
+- 支持 `/retry [任务号]`
+- 支持 `/reset`
+- 支持 `/status`
+
+### 结果回传
+
+- 支持共享卡片持续更新任务状态
+- 支持命令执行过程流式回传
+- 支持任务完成后回写结果摘要
+
+### 上下文管理
+
+- 本地持久化 session 与任务快照
+- 重启后恢复排队任务和中断任务信息
+- 上下文接近上限时自动压缩记忆
+
+### Git 能力
+
+- 群绑定时自动初始化本地 Git 仓库
+- 尝试自动创建 GitHub 公共仓库
+- 可选任务结束后自动 Git 提交
+
+## 配置说明
+
+在项目根目录创建 `.env`。
+
+下面是一份推荐起步配置：
 
 ```dotenv
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=xxx
-# 如果群里需要精确判断是否 @ 到机器人，可以配置
 FEISHU_BOT_OPEN_ID=ou_xxx
 
 HOST=127.0.0.1
 PORT=3000
 ENABLE_HEALTH_SERVER=true
 
-# 逗号分隔；不填则允许所有能给机器人发消息的人
 FEISHU_ALLOWED_OPEN_IDS=
 FEISHU_REPLY_TO_MESSAGE_ENABLED=true
 FEISHU_INTERACTIVE_CARDS_ENABLED=true
 FEISHU_REQUEST_TIMEOUT_MS=10000
 FEISHU_REQUEST_RETRIES=2
 FEISHU_REQUEST_RETRY_DELAY_MS=300
-CONTEXT_COMPACT_ENABLED=true
-CONTEXT_COMPACT_THRESHOLD=0.8
-CONTEXT_MEMORY_LOAD_FRACTION=0.1
-CONTEXT_WINDOW_FALLBACK_TOKENS=128000
 
-CODEX_WORKSPACE_DIR=/home/jingqi/workspace/your-project
+CODEX_WORKSPACE_DIR=/home/you/workspace/default-project
 GITHUB_REPO_OWNER=
-CHAT_WORKSPACE_MAPPINGS="group:oc_xxx=/home/jingqi/workspace/project-a;group:oc_yyy=/home/jingqi/workspace/project-b"
-CODEX_COMMAND="~/.local/bin/codex-proxy --dangerously-bypass-approvals-and-sandbox"
+CHAT_WORKSPACE_MAPPINGS=
+CODEX_COMMAND=
 CODEX_BIN=codex
 CODEX_MODEL=
 CODEX_PROFILE=
 CODEX_SANDBOX=workspace-write
 CODEX_APPROVAL_POLICY=never
 CODEX_SKIP_GIT_REPO_CHECK=true
+
 MAX_CONCURRENT_TASKS=1
 MAX_REPLY_CHARS=1800
+MAX_QUEUED_TASKS_PER_CHAT=5
+MAX_QUEUED_TASKS_PER_USER=10
+
 FEISHU_STREAM_OUTPUT_ENABLED=true
 FEISHU_STREAM_COMMAND_STATUS_ENABLED=true
 FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS=1200
-MAX_QUEUED_TASKS_PER_CHAT=5
-MAX_QUEUED_TASKS_PER_USER=10
-AUTO_COMMIT_AFTER_TASK_ENABLED=true
+
+CONTEXT_COMPACT_ENABLED=true
+CONTEXT_COMPACT_THRESHOLD=0.8
+CONTEXT_MEMORY_LOAD_FRACTION=0.1
+CONTEXT_WINDOW_FALLBACK_TOKENS=128000
+
+AUTO_COMMIT_AFTER_TASK_ENABLED=false
 AUTO_COMMIT_MESSAGE_PREFIX="bridge: save"
 ```
 
-## 飞书侧配置
+### 关键配置项解释
 
-1. 创建一个企业自建应用，并开启机器人能力
-2. 在事件与回调中添加事件：`im.message.receive_v1`、`im.chat.member.bot.added_v1`
-3. 如果启用卡片按钮，再额外订阅卡片按钮回调事件
-4. 在“订阅方式”中选择“使用长连接接收事件/回调”
-5. 不需要配置公网请求地址
-6. 把应用安装到企业，并确保机器人可以被私聊/被群聊 @
-7. 如果要自动创建 GitHub 公共仓库，请先在桥接服务所在机器执行 `gh auth login`
+#### 飞书相关
 
-## 运行
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET`: 飞书应用凭据，必填
+- `FEISHU_BOT_OPEN_ID`: 群里需要精确判断是否 `@` 到机器人时建议填写
+- `FEISHU_ALLOWED_OPEN_IDS`: 限制允许使用机器人的用户，不填则不限制
+- `FEISHU_REPLY_TO_MESSAGE_ENABLED`: 是否回复原消息
+- `FEISHU_INTERACTIVE_CARDS_ENABLED`: 是否用交互卡片承载任务状态
 
-首次配置可以先运行：
+#### Codex 相关
+
+- `CODEX_WORKSPACE_DIR`: 默认工作目录，私聊和未单独映射的聊天会用它
+- `CODEX_COMMAND`: 覆盖默认启动命令
+- `CODEX_BIN`: 未设置 `CODEX_COMMAND` 时使用
+- `CODEX_SANDBOX`: 默认 `workspace-write`
+- `CODEX_APPROVAL_POLICY`: 默认 `never`
+
+#### 群组目录绑定相关
+
+- `GITHUB_REPO_OWNER`: `/bind` 创建 GitHub 仓库时使用的 owner；不填则使用当前 `gh` 登录用户
+- `CHAT_WORKSPACE_MAPPINGS`: 静态聊天目录映射，格式为 `chatKey=/abs/path;chat_id=/abs/path`
+
+#### 任务队列相关
+
+- `MAX_CONCURRENT_TASKS`: 全局最大并发
+- `MAX_QUEUED_TASKS_PER_CHAT`: 单个聊天最大待处理任务数
+- `MAX_QUEUED_TASKS_PER_USER`: 单个用户最大待处理任务数
+
+#### 流式输出相关
+
+- `FEISHU_STREAM_OUTPUT_ENABLED`: 是否把中间进度推回飞书
+- `FEISHU_STREAM_COMMAND_STATUS_ENABLED`: 是否显示命令开始/结束状态
+- `FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS`: 卡片最小更新间隔
+
+#### 上下文压缩相关
+
+- `CONTEXT_COMPACT_ENABLED`: 是否开启上下文压缩
+- `CONTEXT_COMPACT_THRESHOLD`: 超过该比例后触发记忆压缩
+- `CONTEXT_MEMORY_LOAD_FRACTION`: 新会话注入记忆时最多占用多少上下文比例
+
+#### 自动提交相关
+
+- `AUTO_COMMIT_AFTER_TASK_ENABLED=true` 时，每个任务结束后尝试自动 `git add -A && git commit`
+- 打开后会强制串行，避免多个任务同时改同一工作区
+
+## 飞书后台配置步骤
+
+按这个顺序配置最省事：
+
+1. 创建企业自建应用
+2. 开启机器人能力
+3. 安装应用到企业
+4. 在“事件与回调”里添加：
+   - `im.message.receive_v1`
+   - `im.chat.member.bot.added_v1`
+   - 卡片按钮回调事件
+5. 把订阅方式切到“使用长连接接收事件/回调”
+6. 确保机器人能被私聊，或者能在群里被 `@`
+
+如果你要用 `/bind` 自动创建 GitHub 公共仓库，还要先在桥接服务机器上执行：
 
 ```bash
-npm run setup
+gh auth login
 ```
 
-向导会交互式生成或补全 `.env`，并打印飞书后台需要勾选的配置步骤。若直接执行 `npm start` 但缺少必要配置，程序也会自动提示先运行 `npm run setup`。
+## 使用方式
 
-正常启动：
+### 基础命令
+
+- `/help`: 查看帮助
+- `/bind <工作目录> [仓库名]`: 绑定当前群组工作目录并尝试初始化公共仓库
+- `/status`: 查看当前聊天状态、目录、session、排队情况
+- `/reset`: 清空当前聊天 session，保留目录绑定
+- `/abort <任务号>`: 终止运行中的任务，或取消排队任务
+- `/retry [任务号]`: 重试中断任务
+
+### 群组绑定示例
+
+```text
+/bind /home/jingqi/workspace/project-a project-a
+```
+
+含义：
+
+- 当前群后续任务固定在 `/home/jingqi/workspace/project-a`
+- 仓库名使用 `project-a`
+- 如果目录不是 Git 仓库，会自动初始化
+- 如果还没有 `origin`，会尝试创建 GitHub 公共仓库并推送
+
+## 启动与运维
+
+### 本地开发
+
+```bash
+npm run dev
+```
+
+### 生产式启动
 
 ```bash
 npm start
 ```
 
-健康检查：
+### 健康检查
 
 ```bash
-curl http://127.0.0.1:3000/healthz
+curl http://127.0.0.1:${PORT}/healthz
 ```
 
-`CODEX_COMMAND` 可用于覆盖默认启动命令；未配置时才回退到 `CODEX_BIN` 或默认 `codex`。
+健康检查会返回：
 
-开启 `FEISHU_STREAM_OUTPUT_ENABLED=true` 后，桥接器会把中间 `agent_message` 和命令状态更新到同一张任务卡片。可用 `FEISHU_STREAM_COMMAND_STATUS_ENABLED` 控制是否展示命令开始/结束提示，用 `FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS` 控制最小更新间隔，避免刷屏。
+- 当前会话数
+- 排队和运行中的任务数
+- 中断任务数
+- 飞书 HTTP / WS 指标
+- 最近重连信息
 
-开启 `FEISHU_REPLY_TO_MESSAGE_ENABLED=true` 后，桥接器会回复到原消息。开启 `FEISHU_INTERACTIVE_CARDS_ENABLED=true` 后，任务接收、进度和完成状态会复用同一张共享卡片；`/status` 也会返回交互卡片。
+### 查看日志
 
-`CHAT_WORKSPACE_MAPPINGS` 支持用 `chatKey=/abs/path` 或 `chat_id=/abs/path` 按会话映射工作目录，条目之间用分号分隔。开启 `AUTO_COMMIT_AFTER_TASK_ENABLED=true` 后，桥接器会在每个任务结束后先执行自动提交，再继续下一个任务；因此会强制串行执行任务。
+如果你按项目约定把输出重定向到日志文件，可以查看：
 
-群聊首次收到 `im.chat.member.bot.added_v1` 事件后，机器人会提示先执行 `/bind <工作目录> [仓库名]`。绑定成功后，该群后续所有 Codex session 都会固定使用该目录；`/reset` 只会清空 session，不会取消目录绑定。`/bind` 会先确保本地目录是可用的 Git 仓库，再尝试用当前 `gh` 登录态创建 GitHub 公共仓库；如果目录已有 `origin`，则直接沿用现有远端。
+```bash
+tail -f .codex-feishu-bridge/bridge.log
+```
 
-`FEISHU_REQUEST_TIMEOUT_MS`、`FEISHU_REQUEST_RETRIES` 和 `FEISHU_REQUEST_RETRY_DELAY_MS` 用于控制飞书 HTTP 请求的超时和重试。`MAX_QUEUED_TASKS_PER_CHAT`、`MAX_QUEUED_TASKS_PER_USER` 用于限制待处理任务数量，防止单个聊天或用户积压过多任务。
+## 常见问题
 
-开启 `CONTEXT_COMPACT_ENABLED=true` 后，桥接器会在检测到 Codex 上下文占用达到 `CONTEXT_COMPACT_THRESHOLD` 后，自动用当前会话生成记忆摘要，落盘到 `.codex-feishu-bridge/memory/`，并在下一次新会话开始时自动把记忆注入提示词。注入时会按 `CONTEXT_MEMORY_LOAD_FRACTION` 限制记忆最多只占上下文窗口的一部分，默认不超过 10%，避免记忆文件持续膨胀反向挤占上下文。
+### 1. 群里发消息没反应
+
+优先检查：
+
+- 是否已经 `@` 到机器人
+- 是否开启了 `FEISHU_REQUIRE_MENTION_IN_GROUP`
+- 飞书后台是否已订阅 `im.message.receive_v1`
+- 订阅方式是否确实是长连接
+
+### 2. 群里一直提示先 `/bind`
+
+说明当前群还没有工作目录绑定，或者绑定信息被清掉了。直接执行：
+
+```text
+/bind /你的工作目录 仓库名
+```
+
+### 3. `/bind` 失败
+
+通常是这些原因：
+
+- 目录路径无效
+- `git commit` 失败，本机没配置 `user.name` / `user.email`
+- `gh` 未登录
+- GitHub 上仓库名已存在且当前账号无权创建
+
+### 4. 健康检查访问不到
+
+检查：
+
+- `.env` 里的 `HOST` 和 `PORT`
+- 服务是否已成功启动
+- 是否打到了错误端口
+
+### 5. 任务执行一半后服务重启了
+
+Bridge 会把运行快照写到 `.codex-feishu-bridge/state.json`。重启后：
+
+- 排队任务会恢复
+- 运行中的任务会被标记为中断
+- 可以在飞书里用 `/retry` 重新入队
+
+## 安全边界
+
+- Bridge 会自动给 Codex 注入前导指令
+- 默认约束为：删除类操作前必须明确确认
+- 可以通过 `FEISHU_ALLOWED_OPEN_IDS` 限制使用者
+- 默认使用 `CODEX_APPROVAL_POLICY=never` 和 `CODEX_SANDBOX=workspace-write`
+
+## 当前限制
+
+- 当前只支持文本消息
+- 当前依赖飞书后台已切到长连接模式
+- 任务执行结果主要通过共享卡片汇总，不会为每次状态变化都发送新消息
+
+## 测试
 
 运行测试：
 
 ```bash
 npm test
 ```
+
+当前仓库已包含基础测试，覆盖了：
+
+- Bridge 路由与任务队列
+- Codex runner 的取消逻辑
+- Feishu HTTP / WS 客户端
+- 初始化向导
+- Git 自动提交
 
 ## 测试记录
 
@@ -263,8 +517,9 @@ npm test
 - 已本地启动长连接客户端，状态页返回 `transport: "feishu-ws"`
 - 还没有用真实飞书聊天消息做最终回路验证；这一步依赖应用在飞书后台已开启长连接订阅，并且机器人已安装且可收消息
 
-## 建议的后续版本
+## 后续可扩展方向
 
 - 增加更细粒度的工作目录路由规则，例如按用户或按消息前缀切换
-- 增加自动 push / PR 工作流，但应和自动 commit 解耦
-- 增加任务历史查询与卡片归档能力，便于跨重启追踪执行结果
+- 增加自动 push / PR 工作流，但和自动 commit 解耦
+- 增加任务历史查询与卡片归档
+- 增加更多消息类型支持
