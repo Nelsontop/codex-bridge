@@ -8,6 +8,106 @@
 
 ## 实现方案
 
+### 系统架构图
+
+```mermaid
+flowchart LR
+    User["飞书用户"]
+    Group["飞书群聊 / 私聊"]
+    Feishu["飞书开放平台<br/>事件与消息 API"]
+    WS["FeishuWsClient<br/>长连接事件接收"]
+    HTTP["FeishuClient<br/>发送文本/卡片"]
+    Bridge["BridgeService<br/>鉴权、路由、队列、会话"]
+    State["StateStore<br/>.codex-feishu-bridge/state.json"]
+    Memory["上下文记忆文件<br/>.codex-feishu-bridge/memory/*.md"]
+    Binding["Workspace Binding<br/>/bind + git/gh 初始化"]
+    Runner["codex-runner<br/>codex exec / resume"]
+    Codex["Codex CLI"]
+    Workspace["群组绑定工作目录<br/>本地 Git 仓库"]
+    GitHub["GitHub 公共仓库"]
+    Health["Health Server<br/>/healthz"]
+
+    User --> Group
+    Group --> Feishu
+    Feishu --> WS
+    Bridge --> HTTP
+    HTTP --> Feishu
+    Feishu --> Group
+
+    WS --> Bridge
+    Bridge <--> State
+    Bridge <--> Memory
+    Bridge --> Binding
+    Binding --> Workspace
+    Binding --> GitHub
+
+    Bridge --> Runner
+    Runner --> Codex
+    Codex --> Workspace
+    Runner --> Bridge
+
+    Health --> Bridge
+    Health --> HTTP
+    Health --> WS
+```
+
+### 整体交互图
+
+```mermaid
+sequenceDiagram
+    participant U as 飞书用户
+    participant F as 飞书开放平台
+    participant W as FeishuWsClient
+    participant B as BridgeService
+    participant S as StateStore
+    participant WB as Workspace Binding
+    participant G as git / gh
+    participant C as Codex CLI
+    participant H as FeishuClient
+
+    rect rgb(245, 247, 250)
+        Note over U,H: 首次拉群与工作目录绑定
+        F->>W: im.chat.member.bot.added_v1
+        W->>B: dispatchEvent()
+        B->>S: 记录群会话为 pending
+        B->>H: 发送 /bind 提示
+        H->>F: 发群消息/卡片
+        F->>U: 提示绑定工作目录
+        U->>F: /bind <目录> [仓库名]
+        F->>W: im.message.receive_v1
+        W->>B: handleCommand(/bind)
+        B->>WB: prepareWorkspaceBinding()
+        WB->>G: git init / commit / gh repo create --public
+        G-->>WB: 本地仓库与远端结果
+        WB-->>B: workspaceDir + repo 状态
+        B->>S: 持久化群组绑定
+        B->>H: 回复绑定结果
+        H->>F: 发群消息
+        F->>U: 绑定成功
+    end
+
+    rect rgb(245, 250, 245)
+        Note over U,H: 日常任务执行
+        U->>F: @机器人 发送任务
+        F->>W: im.message.receive_v1
+        W->>B: dispatchEvent()
+        B->>S: 读取群组绑定、session、任务队列
+        alt 群未绑定目录
+            B->>H: 返回绑定提示
+            H->>F: 发群消息
+            F->>U: 暂不执行任务
+        else 已绑定
+            B->>B: 入队并选择工作目录
+            B->>C: codex exec / exec resume
+            C-->>B: 流式事件 / 最终结果
+            B->>S: 更新 session、任务状态、记忆文件
+            B->>H: 更新任务卡片或文本回复
+            H->>F: 发消息/更新卡片
+            F->>U: 查看进度与结果
+        end
+    end
+```
+
 ### 架构
 
 1. 本地服务启动后，先向飞书请求长连接 endpoint
