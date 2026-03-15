@@ -291,7 +291,7 @@ test("real message event creates a shared card and resumes the existing session"
   await bridge.dispatchEvent(payload);
 
   assert.equal(client.cards.length, 1);
-  assert.equal(client.cards[0].card.header.title.content, "T001-检查项目状态");
+  assert.equal(client.cards[0].card.header.title.content, "T001");
   assert.equal(client.cards[0].card.elements[0].text.content.includes("终止兜底"), false);
   assert.equal(runner.calls.length, 1);
   assert.equal(runner.calls[0].sessionId, "thread_existing");
@@ -383,7 +383,7 @@ test("card action can cancel a queued task created from a real event payload", a
   await waitFor(() => bridge.running.size === 0);
 });
 
-test("abort command accepts the full task name", async () => {
+test("abort command accepts the task id", async () => {
   const client = createClient();
   const runner = createRunnerController();
   const bridge = new BridgeService(
@@ -405,7 +405,7 @@ test("abort command accepts the full task name", async () => {
   await bridge.dispatchEvent(secondPayload);
 
   await bridge.handleCommand({
-    commandText: "/abort T002-继续第二个任务",
+    commandText: "/abort T002",
     chatId: "oc_test_chat",
     chatKey: "p2p:oc_test_chat",
     target: {
@@ -415,7 +415,7 @@ test("abort command accepts the full task name", async () => {
   });
 
   assert.equal(bridge.queue.length, 0);
-  assert.equal(client.texts.at(-1).text, "已取消排队中的任务 T002-继续第二个任务。");
+  assert.equal(client.texts.at(-1).text, "已取消排队中的任务 T002。");
 
   runner.pending[0].resolve({
     finalMessage: "first done",
@@ -721,7 +721,7 @@ test("retry command retries the latest interrupted task in the current chat", as
   assert.equal(bridge.interruptedTasks.length, 0);
   assert.equal(runner.calls.length, 1);
   assert.equal(runner.calls[0].prompt, "恢复数据库索引");
-  assert.equal(client.texts.at(-1).text, "已重试任务 T0006-恢复数据库索引，队列位置 1。");
+  assert.equal(client.texts.at(-1).text, "已重试任务 T0006，队列位置 1。");
 
   runner.pending[0].resolve({
     finalMessage: "retried done",
@@ -947,7 +947,7 @@ test("loaded memory is trimmed to at most ten percent of the context budget", as
   assert.equal(calls[0].prompt.includes(largeMemory), false);
 });
 
-test("task title summary extracts intent instead of truncating raw text", async () => {
+test("task title only keeps the task id", async () => {
   const client = createClient();
   const runner = createRunnerController();
   const bridge = new BridgeService(
@@ -967,7 +967,7 @@ test("task title summary extracts intent instead of truncating raw text", async 
 
   await bridge.dispatchEvent(payload);
 
-  assert.equal(client.cards[0].card.header.title.content, "T001-优化任务标题摘要");
+  assert.equal(client.cards[0].card.header.title.content, "T001");
 
   runner.pending[0].resolve({
     finalMessage: "done",

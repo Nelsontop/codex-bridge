@@ -186,7 +186,7 @@ function summarizeTaskPrompt(prompt, maxChars = 18) {
 }
 
 function buildTaskName(task) {
-  return `${task.id}-${task.nameSummary || summarizeTaskPrompt(task.prompt)}`;
+  return task.id;
 }
 
 function matchesTaskReference(task, reference) {
@@ -1172,7 +1172,7 @@ export class BridgeService {
     if (command === "/abort") {
       const taskReference = rest[0];
       if (!taskReference) {
-        await this.safeSend(target, "用法：/abort T001 或 /abort T001-任务摘要");
+        await this.safeSend(target, "用法：/abort T001");
         return;
       }
 
