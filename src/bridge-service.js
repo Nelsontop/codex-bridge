@@ -74,21 +74,115 @@ function formatTaskId(number) {
   return `T${String(number).padStart(3, "0")}`;
 }
 
-function summarizeTaskPrompt(prompt, maxChars = 18) {
-  const firstLine = String(prompt || "")
-    .split(/\r?\n/, 1)[0]
+const SUMMARY_ACTION_RULES = [
+  [/^(请)?(优化|改进|改良)/, "优化"],
+  [/^(请)?(修复|解决|排查|处理)/, "修复"],
+  [/^(请)?(新增|增加|添加|支持|实现)/, "新增"],
+  [/^(请)?(安装|集成)/, "安装"],
+  [/^(请)?(测试|验证)/, "测试"],
+  [/^(请)?(检查|查看|审查|review|review当前)/i, "检查"],
+  [/^(请)?(分析|解释|说明)/, "分析"],
+  [/^(请)?(重构)/, "重构"],
+  [/^(请)?(整理|汇总|总结)/, "整理"]
+];
+
+function normalizeSummaryText(text) {
+  return String(text || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[[^\]]+\]\([^)]+\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, (match) => {
+      const gitSkill = match.match(/skills\/(?:\.curated|\.experimental)\/([^/?#]+)/);
+      if (gitSkill) {
+        return `${gitSkill[1]} 技能`;
+      }
+      const githubTree = match.match(/github\.com\/[^/]+\/[^/]+\/tree\/[^/]+\/(.+)$/);
+      if (githubTree) {
+        const last = githubTree[1].split("/").filter(Boolean).pop();
+        return last || "链接";
+      }
+      return "链接";
+    })
+    .replace(/\s+/g, " ")
     .trim();
-  if (!firstLine) {
+}
+
+function detectSummaryAction(text) {
+  const normalized = normalizeSummaryText(text);
+  for (const [pattern, label] of SUMMARY_ACTION_RULES) {
+    if (pattern.test(normalized)) {
+      return label;
+    }
+  }
+  return "";
+}
+
+function extractSummaryTopic(text, action) {
+  const normalized = normalizeSummaryText(text)
+    .replace(/^(请|帮我|麻烦你|需要你)\s*/, "")
+    .replace(/^(看下|看看)\s*/, "");
+  if (!normalized) {
+    return "";
+  }
+
+  if (action) {
+    const actionPattern = new RegExp(`^${action}`);
+    const withoutAction = normalized.replace(actionPattern, "").trim();
+    const directTopic = withoutAction
+      .split(/[，。；！？,.!?\n]/, 1)[0]
+      .replace(/^(一下|下|一下子|一下这个|一下这条|一下当前)\s*/, "")
+      .replace(/^(任务|技能|功能|按钮)\s*/, (match) => match)
+      .trim();
+    if (directTopic) {
+      return directTopic;
+    }
+  }
+
+  const codeMatch = normalized.match(/([A-Za-z0-9._/-]+\.(js|ts|md|json|yaml|yml))/i);
+  if (codeMatch) {
+    return codeMatch[1];
+  }
+
+  return normalized.split(/[，。；！？,.!?\n]/, 1)[0].trim();
+}
+
+function summarizeTaskPrompt(prompt, maxChars = 18) {
+  const normalized = normalizeSummaryText(
+    String(prompt || "")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(" ")
+  );
+  if (!normalized) {
     return "task";
   }
 
-  const compact = firstLine
-    .replace(/\s+/g, "-")
-    .replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "");
-  const normalized = compact || "task";
-  return normalized.slice(0, maxChars).replace(/^[-_]+|[-_]+$/g, "") || "task";
+  const action = detectSummaryAction(normalized);
+  let topic = extractSummaryTopic(normalized, action);
+  topic = topic
+    .replace(/^(当前|这个|这次)\s*/, "")
+    .replace(/(，|。|；|！|？).*$/, "")
+    .replace(/\s+/g, "")
+    .replace(/^请/, "")
+    .trim();
+
+  let summary = action
+    ? `${action}${topic && !topic.startsWith(action) ? topic : topic.replace(new RegExp(`^${action}`), "")}`
+    : topic || normalized;
+  summary = summary
+    .replace(/^(检查当前)/, "检查")
+    .replace(/^(查看当前)/, "查看")
+    .replace(/^(review)/i, "审查")
+    .trim();
+
+  if (!summary) {
+    summary = "task";
+  }
+  if (summary.length > maxChars) {
+    summary = summary.slice(0, maxChars).replace(/[，。；！？,.!?\s_-]+$/g, "");
+  }
+  return summary || "task";
 }
 
 function buildTaskName(task) {
@@ -115,6 +209,7 @@ function helpText() {
     "/help 查看帮助",
     "/status 查看当前会话、工作目录与任务状态",
     "/reset 清空当前聊天绑定的 Codex 会话",
+    "/retry [任务号] 重试当前聊天中最近的中断任务，或指定中断任务",
     "/abort <任务号> 终止运行中的任务，或取消排队中的任务",
     "",
     "其余文本会直接发送给 Codex 执行。"
@@ -656,6 +751,21 @@ export class BridgeService {
       return;
     }
 
+    if (action.name === "retry") {
+      await this.handleCommand({
+        chatId: action.chatId,
+        chatKey: action.chatKey,
+        commandText: `/retry ${action.taskId}`.trim(),
+        senderOpenId: action.senderOpenId,
+        silentSuccess: true,
+        target: {
+          chatId: action.chatId,
+          replyToMessageId: action.replyToMessageId
+        }
+      });
+      return;
+    }
+
     if (action.name === "reset") {
       await this.handleCommand({
         chatId: action.chatId,
@@ -720,6 +830,92 @@ export class BridgeService {
     return task;
   }
 
+  findInterruptedTask(chatKey, taskReference = "") {
+    const normalized = String(taskReference || "").trim();
+    if (!normalized) {
+      for (let index = this.interruptedTasks.length - 1; index >= 0; index -= 1) {
+        const task = this.interruptedTasks[index];
+        if (task.chatKey === chatKey) {
+          return { index, task };
+        }
+      }
+      return { index: -1, task: null };
+    }
+
+    const index = this.interruptedTasks.findIndex(
+      (task) => task.chatKey === chatKey && matchesTaskReference(task, normalized)
+    );
+    return {
+      index,
+      task: index >= 0 ? this.interruptedTasks[index] : null
+    };
+  }
+
+  async retryInterruptedTask({ chatId, chatKey, taskReference = "", target, silentSuccess }) {
+    const pendingForChat = this.countPendingTasksForChat(chatKey);
+    if (pendingForChat >= this.config.maxQueuedTasksPerChat) {
+      this.metrics.rejectedByChatLimit += 1;
+      await this.safeSend(
+        target,
+        `当前聊天待处理任务已达上限（${this.config.maxQueuedTasksPerChat}）。请等待已有任务完成，或用 /abort <任务号> 取消排队任务。`
+      );
+      return;
+    }
+
+    const { index, task } = this.findInterruptedTask(chatKey, taskReference);
+    if (!task) {
+      await this.safeSend(
+        target,
+        taskReference
+          ? `当前聊天没有中断任务 ${taskReference}。`
+          : "当前聊天没有可重试的中断任务。"
+      );
+      return;
+    }
+
+    const pendingForUser = this.countPendingTasksForUser(task.senderOpenId);
+    if (pendingForUser >= this.config.maxQueuedTasksPerUser) {
+      this.metrics.rejectedByUserLimit += 1;
+      await this.safeSend(
+        target,
+        `当前用户待处理任务已达上限（${this.config.maxQueuedTasksPerUser}）。请等待已有任务完成，或取消排队中的任务。`
+      );
+      return;
+    }
+
+    this.interruptedTasks.splice(index, 1);
+    task.status = "queued";
+    task.recovered = true;
+    task.abortRequested = false;
+    task.autoCommitSummary = "";
+    task.contextUsageRatio = 0;
+    task.enqueuedAt = new Date().toISOString();
+    task.finalMessage = "";
+    task.lastErrorMessage = "";
+    task.lastProgressText = "任务已从中断状态重新入队。";
+    task.lastStreamSentAt = 0;
+    task.modelContextWindow = 0;
+    task.sessionId = "";
+    task.startedAt = "";
+    task.startedCommandIds = new Set();
+    task.completedCommandIds = new Set();
+    task.streamChain = Promise.resolve();
+    task.workspaceDir = task.workspaceDir || this.resolveWorkspaceDir(chatKey, chatId);
+    this.queue.push(task);
+    const queuePosition = this.queue.findIndex((item) => item.id === task.id) + 1;
+    this.persistRuntime();
+    await this.syncTaskCard(task);
+    await this.refreshQueuedTaskCards();
+    this.pumpQueue();
+
+    if (!silentSuccess) {
+      await this.safeSend(
+        target,
+        `已重试任务 ${buildTaskName(task)}，队列位置 ${queuePosition}。`
+      );
+    }
+  }
+
   buildTaskCard(task) {
     const taskName = buildTaskName(task);
     const actions = [];
@@ -727,6 +923,17 @@ export class BridgeService {
       actions.push(
         buildCardButton("终止任务", "danger", {
           action: "abort",
+          chatId: task.target.chatId,
+          chatKey: task.chatKey,
+          replyToMessageId: task.target.replyToMessageId,
+          taskId: task.id
+        })
+      );
+    }
+    if (task.status === "interrupted") {
+      actions.push(
+        buildCardButton("重试任务", "primary", {
+          action: "retry",
           chatId: task.target.chatId,
           chatKey: task.chatKey,
           replyToMessageId: task.target.replyToMessageId,
@@ -752,9 +959,6 @@ export class BridgeService {
     const queueIndex = this.queue.findIndex((item) => item.id === task.id);
     if (task.status === "queued" && queueIndex >= 0) {
       bodyLines.push(`**队列位置**：${queueIndex + 1}`);
-    }
-    if (task.status === "queued" || task.status === "running") {
-      bodyLines.push(`**终止兜底**：\`/abort ${task.id}\``);
     }
     if (task.sessionId) {
       bodyLines.push(`**Session**：\`${task.sessionId}\``);
@@ -950,6 +1154,18 @@ export class BridgeService {
       }
 
       await this.safeSend(target, lines.join("\n"));
+      return;
+    }
+
+    if (command === "/retry") {
+      const taskReference = rest[0] || "";
+      await this.retryInterruptedTask({
+        chatId,
+        chatKey,
+        silentSuccess,
+        target,
+        taskReference
+      });
       return;
     }
 

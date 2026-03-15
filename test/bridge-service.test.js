@@ -291,8 +291,8 @@ test("real message event creates a shared card and resumes the existing session"
   await bridge.dispatchEvent(payload);
 
   assert.equal(client.cards.length, 1);
-  assert.equal(client.cards[0].card.header.title.content, "T001-请检查当前项目状态");
-  assert.equal(client.cards[0].card.elements[0].text.content.includes("`/abort T001`"), true);
+  assert.equal(client.cards[0].card.header.title.content, "T001-检查项目状态");
+  assert.equal(client.cards[0].card.elements[0].text.content.includes("终止兜底"), false);
   assert.equal(runner.calls.length, 1);
   assert.equal(runner.calls[0].sessionId, "thread_existing");
 
@@ -405,7 +405,7 @@ test("abort command accepts the full task name", async () => {
   await bridge.dispatchEvent(secondPayload);
 
   await bridge.handleCommand({
-    commandText: "/abort T002-请继续第二个任务",
+    commandText: "/abort T002-继续第二个任务",
     chatId: "oc_test_chat",
     chatKey: "p2p:oc_test_chat",
     target: {
@@ -415,7 +415,7 @@ test("abort command accepts the full task name", async () => {
   });
 
   assert.equal(bridge.queue.length, 0);
-  assert.equal(client.texts.at(-1).text, "已取消排队中的任务 T002-请继续第二个任务。");
+  assert.equal(client.texts.at(-1).text, "已取消排队中的任务 T002-继续第二个任务。");
 
   runner.pending[0].resolve({
     finalMessage: "first done",
@@ -673,6 +673,116 @@ test("resumeRecoveredTasks restores queued snapshots and surfaces interrupted ta
   await waitFor(() => bridge.running.size === 0);
 });
 
+test("retry command retries the latest interrupted task in the current chat", async () => {
+  const client = createClient();
+  const runner = createRunnerController();
+  const bridge = new BridgeService(
+    createConfig({ feishuInteractiveCardsEnabled: false, maxConcurrentTasks: 1 }),
+    createStore({
+      runtime: {
+        interrupted: [
+          {
+            chatKey: "p2p:oc_test_chat",
+            enqueuedAt: "2026-03-15T00:00:00.000Z",
+            id: "T0006",
+            nameSummary: "恢复数据库索引",
+            prompt: "恢复数据库索引",
+            senderOpenId: "ou_user_a",
+            status: "interrupted",
+            target: {
+              chatId: "oc_test_chat",
+              replyToMessageId: "om_source_message_6"
+            },
+            workspaceDir: "/tmp/codex-workspace"
+          }
+        ],
+        nextTaskNumber: 7,
+        queue: [],
+        running: []
+      }
+    }),
+    client,
+    {
+      autoCommitWorkspace: async () => ({ status: "disabled" }),
+      runCodexTask: runner.runCodexTask.bind(runner)
+    }
+  );
+
+  await bridge.handleCommand({
+    commandText: "/retry",
+    chatId: "oc_test_chat",
+    chatKey: "p2p:oc_test_chat",
+    target: {
+      chatId: "oc_test_chat",
+      replyToMessageId: "om_source_message_retry"
+    }
+  });
+
+  assert.equal(bridge.interruptedTasks.length, 0);
+  assert.equal(runner.calls.length, 1);
+  assert.equal(runner.calls[0].prompt, "恢复数据库索引");
+  assert.equal(client.texts.at(-1).text, "已重试任务 T0006-恢复数据库索引，队列位置 1。");
+
+  runner.pending[0].resolve({
+    finalMessage: "retried done",
+    sessionId: "thread_retry"
+  });
+  await waitFor(() => bridge.running.size === 0);
+});
+
+test("card action can retry an interrupted task", async () => {
+  const client = createClient();
+  const runner = createRunnerController();
+  const bridge = new BridgeService(
+    createConfig({ maxConcurrentTasks: 1 }),
+    createStore({
+      runtime: {
+        interrupted: [
+          {
+            cardMessageId: "om_card_interrupted",
+            chatKey: "p2p:oc_test_chat",
+            enqueuedAt: "2026-03-15T00:00:00.000Z",
+            id: "T0008",
+            nameSummary: "修复部署脚本",
+            prompt: "修复部署脚本",
+            senderOpenId: "ou_user_a",
+            status: "interrupted",
+            target: {
+              chatId: "oc_test_chat",
+              replyToMessageId: "om_source_message_8"
+            },
+            workspaceDir: "/tmp/codex-workspace"
+          }
+        ],
+        nextTaskNumber: 9,
+        queue: [],
+        running: []
+      }
+    }),
+    client,
+    {
+      autoCommitWorkspace: async () => ({ status: "disabled" }),
+      runCodexTask: runner.runCodexTask.bind(runner)
+    }
+  );
+
+  const actionPayload = loadFixture("card.action.trigger.json");
+  actionPayload.event.action.value.action = "retry";
+  actionPayload.event.action.value.taskId = "T0008";
+  await bridge.dispatchEvent(actionPayload);
+
+  assert.equal(bridge.interruptedTasks.length, 0);
+  assert.equal(runner.calls.length, 1);
+  assert.equal(runner.calls[0].prompt, "修复部署脚本");
+  assert.equal(client.cardUpdates.some((update) => update.messageId === "om_card_interrupted"), true);
+
+  runner.pending[0].resolve({
+    finalMessage: "retried by card",
+    sessionId: "thread_retry_card"
+  });
+  await waitFor(() => bridge.running.size === 0);
+});
+
 test("dispatchEvent rejects tasks when the chat queue limit is reached", async () => {
   const client = createClient();
   const runner = createRunnerController();
@@ -835,4 +945,33 @@ test("loaded memory is trimmed to at most ten percent of the context budget", as
 
   assert.equal(calls[0].prompt.includes("[记忆内容已按上下文预算截断]"), true);
   assert.equal(calls[0].prompt.includes(largeMemory), false);
+});
+
+test("task title summary extracts intent instead of truncating raw text", async () => {
+  const client = createClient();
+  const runner = createRunnerController();
+  const bridge = new BridgeService(
+    createConfig(),
+    createStore(),
+    client,
+    {
+      autoCommitWorkspace: async () => ({ status: "disabled" }),
+      runCodexTask: runner.runCodexTask.bind(runner)
+    }
+  );
+
+  const payload = loadFixture("message.receive_v1.json");
+  payload.event.message.content =
+    "{\"text\":\"优化任务标题摘要，不要简单的截断，要理解内容再总结\"}";
+  payload.event.message.message_id = "om_source_message_title";
+
+  await bridge.dispatchEvent(payload);
+
+  assert.equal(client.cards[0].card.header.title.content, "T001-优化任务标题摘要");
+
+  runner.pending[0].resolve({
+    finalMessage: "done",
+    sessionId: "thread_title"
+  });
+  await waitFor(() => bridge.running.size === 0);
 });
