@@ -20,6 +20,31 @@ function flattenEventEnvelope(payload) {
   };
 }
 
+function createGroupMessageEvent({
+  chatId = "group-chat-1",
+  messageId = "group-msg-1",
+  text = "请处理这个任务"
+} = {}) {
+  return {
+    event: {
+      message: {
+        chat_id: chatId,
+        chat_type: "group",
+        content: JSON.stringify({ text }),
+        mentions: [],
+        message_id: messageId,
+        message_type: "text"
+      },
+      sender: {
+        sender_id: {
+          open_id: "ou_group_user"
+        },
+        sender_type: "user"
+      }
+    }
+  };
+}
+
 function createConfig(overrides = {}) {
   return {
     chatWorkspaceMappings: new Map(),
@@ -36,6 +61,7 @@ function createConfig(overrides = {}) {
     feishuStreamCommandStatusEnabled: true,
     feishuStreamOutputEnabled: true,
     feishuStreamUpdateMinIntervalMs: 0,
+    githubRepoOwner: "",
     gitAutoCommitEnabled: false,
     maxConcurrentTasks: 2,
     maxQueuedTasksPerChat: 5,
@@ -209,6 +235,150 @@ test("dispatchEvent tolerates malformed text payloads", async () => {
   ]);
 });
 
+test("bot added event prompts the group to bind a workspace", async () => {
+  const client = createClient();
+  const store = createStore();
+  const bridge = new BridgeService(
+    createConfig({ feishuInteractiveCardsEnabled: false, maxReplyChars: 2000 }),
+    store,
+    client
+  );
+
+  await bridge.dispatchEvent({
+    chat_id: "oc_group_bind",
+    event_id: "evt_bind_1",
+    event_type: "im.chat.member.bot.added_v1"
+  });
+
+  assert.equal(client.texts.length, 1);
+  assert.equal(client.texts[0].chatId, "oc_group_bind");
+  assert.equal(client.texts[0].text.includes("/bind <工作目录> [仓库名]"), true);
+  assert.equal(
+    store.getConversation("group:oc_group_bind").bindingStatus,
+    "pending"
+  );
+});
+
+test("group messages are blocked until a workspace is bound", async () => {
+  const client = createClient();
+  const runner = createRunnerController();
+  const bridge = new BridgeService(
+    createConfig({
+      feishuInteractiveCardsEnabled: false,
+      maxReplyChars: 2000,
+      requireMentionInGroup: false
+    }),
+    createStore(),
+    client,
+    {
+      autoCommitWorkspace: async () => ({ status: "disabled" }),
+      runCodexTask: runner.runCodexTask.bind(runner)
+    }
+  );
+
+  await bridge.dispatchEvent(createGroupMessageEvent());
+
+  assert.equal(client.texts.at(-1).text.includes("当前群组还没有绑定工作目录"), true);
+  assert.equal(runner.calls.length, 0);
+  assert.equal(bridge.queue.length, 0);
+  assert.equal(bridge.running.size, 0);
+});
+
+test("bind command stores the group workspace and later tasks use it", async () => {
+  const client = createClient();
+  const runner = createRunnerController();
+  const store = createStore();
+  const bridge = new BridgeService(
+    createConfig({
+      feishuInteractiveCardsEnabled: false,
+      requireMentionInGroup: false
+    }),
+    store,
+    client,
+    {
+      autoCommitWorkspace: async () => ({ status: "disabled" }),
+      prepareWorkspaceBinding: async () => ({
+        gitInitialized: true,
+        initialCommitCreated: true,
+        remoteStatus: "created",
+        remoteUrl: "https://github.com/Nelsontop/group-project",
+        repoName: "group-project",
+        workspaceDir: "/tmp/group-project"
+      }),
+      runCodexTask: runner.runCodexTask.bind(runner)
+    }
+  );
+
+  await bridge.handleCommand({
+    commandText: "/bind /tmp/group-project group-project",
+    chatId: "oc_group_workspace",
+    chatKey: "group:oc_group_workspace",
+    target: {
+      chatId: "oc_group_workspace",
+      replyToMessageId: "om_bind"
+    }
+  });
+
+  assert.equal(
+    store.getConversation("group:oc_group_workspace").workspaceDir,
+    "/tmp/group-project"
+  );
+  assert.equal(client.texts.at(-1).text.includes("后续在当前群里启动的 Codex session"), true);
+
+  await bridge.dispatchEvent(
+    createGroupMessageEvent({
+      chatId: "oc_group_workspace",
+      messageId: "group-msg-2",
+      text: "继续修复这个群里的任务"
+    })
+  );
+
+  assert.equal(runner.calls.length, 1);
+  assert.equal(runner.calls[0].workspaceDir, "/tmp/group-project");
+
+  runner.pending[0].resolve({
+    finalMessage: "done",
+    sessionId: "thread_group_workspace"
+  });
+  await waitFor(() => bridge.running.size === 0);
+});
+
+test("reset clears the session but preserves the bound workspace", async () => {
+  const client = createClient();
+  const store = createStore({
+    conversations: {
+      "group:oc_group_reset": {
+        bindingStatus: "bound",
+        memoryFilePath: "/tmp/memory.md",
+        repoRemoteUrl: "https://github.com/Nelsontop/group-reset",
+        sessionId: "thread_reset",
+        workspaceDir: "/tmp/group-reset"
+      }
+    }
+  });
+  const bridge = new BridgeService(
+    createConfig({ feishuInteractiveCardsEnabled: false }),
+    store,
+    client
+  );
+
+  await bridge.handleCommand({
+    commandText: "/reset",
+    chatId: "oc_group_reset",
+    chatKey: "group:oc_group_reset",
+    target: {
+      chatId: "oc_group_reset",
+      replyToMessageId: "om_reset"
+    }
+  });
+
+  const conversation = store.getConversation("group:oc_group_reset");
+  assert.equal(conversation.workspaceDir, "/tmp/group-reset");
+  assert.equal(conversation.sessionId, "");
+  assert.equal(conversation.memoryFilePath, "");
+  assert.equal(client.texts.at(-1).text.includes("工作目录绑定保留"), true);
+});
+
 test("dispatchEvent ignores duplicate message events with the same source message id", async () => {
   const client = createClient();
   const runner = createRunnerController();
@@ -321,7 +491,7 @@ test("real message event creates a shared card and resumes the existing session"
   await bridge.dispatchEvent(payload);
 
   assert.equal(client.cards.length, 1);
-  assert.equal(client.cards[0].card.header.title.content, "T001");
+  assert.equal(client.cards[0].card.header.title.content, "T001-检查项目状态");
   assert.equal(client.cards[0].card.elements[0].text.content.includes("终止兜底"), false);
   assert.equal(runner.calls.length, 1);
   assert.equal(runner.calls[0].sessionId, "thread_existing");
@@ -447,7 +617,7 @@ test("duplicate card actions are ignored after the first cancel request", async 
   assert.equal(bridge.getHealth().duplicateEventCount, 1);
 });
 
-test("abort command accepts the task id", async () => {
+test("abort command accepts the full task name", async () => {
   const client = createClient();
   const runner = createRunnerController();
   const bridge = new BridgeService(
@@ -469,7 +639,7 @@ test("abort command accepts the task id", async () => {
   await bridge.dispatchEvent(secondPayload);
 
   await bridge.handleCommand({
-    commandText: "/abort T002",
+    commandText: "/abort T002-继续第二个任务",
     chatId: "oc_test_chat",
     chatKey: "p2p:oc_test_chat",
     target: {
@@ -479,7 +649,7 @@ test("abort command accepts the task id", async () => {
   });
 
   assert.equal(bridge.queue.length, 0);
-  assert.equal(client.texts.at(-1).text, "已取消排队中的任务 T002。");
+  assert.equal(client.texts.at(-1).text, "已取消排队中的任务 T002-继续第二个任务。");
 
   runner.pending[0].resolve({
     finalMessage: "first done",
@@ -785,7 +955,7 @@ test("retry command retries the latest interrupted task in the current chat", as
   assert.equal(bridge.interruptedTasks.length, 0);
   assert.equal(runner.calls.length, 1);
   assert.equal(runner.calls[0].prompt, "恢复数据库索引");
-  assert.equal(client.texts.at(-1).text, "已重试任务 T0006，队列位置 1。");
+  assert.equal(client.texts.at(-1).text, "已重试任务 T0006-恢复数据库索引，队列位置 1。");
 
   runner.pending[0].resolve({
     finalMessage: "retried done",
@@ -1011,7 +1181,7 @@ test("loaded memory is trimmed to at most ten percent of the context budget", as
   assert.equal(calls[0].prompt.includes(largeMemory), false);
 });
 
-test("task title only keeps the task id", async () => {
+test("task title summary extracts intent instead of truncating raw text", async () => {
   const client = createClient();
   const runner = createRunnerController();
   const bridge = new BridgeService(
@@ -1031,7 +1201,7 @@ test("task title only keeps the task id", async () => {
 
   await bridge.dispatchEvent(payload);
 
-  assert.equal(client.cards[0].card.header.title.content, "T001");
+  assert.equal(client.cards[0].card.header.title.content, "T001-优化任务标题摘要");
 
   runner.pending[0].resolve({
     finalMessage: "done",

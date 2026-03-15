@@ -255,6 +255,7 @@ export function loadConfig(rootDir = process.cwd()) {
       process.env.FEISHU_INTERACTIVE_CARDS_ENABLED,
       true
     ),
+    githubRepoOwner: process.env.GITHUB_REPO_OWNER || "",
     codexBin: process.env.CODEX_BIN || "codex",
     codexCommand: resolveCodexCommand(),
     codexWorkspaceDir: workspaceDir,

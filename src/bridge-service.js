@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runCodexTask as defaultRunCodexTask } from "./codex-runner.js";
+import { prepareWorkspaceBinding as defaultPrepareWorkspaceBinding } from "./workspace-binding.js";
 import {
   autoCommitWorkspace as defaultAutoCommitWorkspace,
   rollbackAutoCommitWorkspace as defaultRollbackAutoCommitWorkspace
@@ -189,7 +190,7 @@ function summarizeTaskPrompt(prompt, maxChars = 18) {
 }
 
 function buildTaskName(task) {
-  return task.id;
+  return `${task.id}-${task.nameSummary || summarizeTaskPrompt(task.prompt)}`;
 }
 
 function matchesTaskReference(task, reference) {
@@ -210,8 +211,9 @@ function helpText() {
   return [
     "Codex Feishu Bridge 命令：",
     "/help 查看帮助",
+    "/bind <目录> [仓库名] 绑定当前群组工作目录并初始化 GitHub 公共仓库",
     "/status 查看当前会话、工作目录与任务状态",
-    "/reset 清空当前聊天绑定的 Codex 会话",
+    "/reset 清空当前聊天绑定的 Codex 会话，不影响工作目录绑定",
     "/retry [任务号] 重试当前聊天中最近的中断任务，或指定中断任务",
     "/abort <任务号> 终止运行中的任务，或取消排队中的任务",
     "",
@@ -307,6 +309,18 @@ function extractMessageEvent(eventEnvelope) {
       message: eventEnvelope.message,
       sender: eventEnvelope.sender
     };
+  }
+
+  return null;
+}
+
+function extractBotAddedEvent(eventEnvelope) {
+  if (eventEnvelope?.event?.chat_id) {
+    return eventEnvelope.event;
+  }
+
+  if (eventEnvelope?.chat_id) {
+    return eventEnvelope;
   }
 
   return null;
@@ -408,6 +422,8 @@ export class BridgeService {
     this.store = store;
     this.feishuClient = feishuClient;
     this.runCodexTask = dependencies.runCodexTask || defaultRunCodexTask;
+    this.prepareWorkspaceBinding =
+      dependencies.prepareWorkspaceBinding || defaultPrepareWorkspaceBinding;
     this.autoCommitWorkspace =
       dependencies.autoCommitWorkspace || defaultAutoCommitWorkspace;
     this.rollbackAutoCommitWorkspace =
@@ -435,10 +451,58 @@ export class BridgeService {
   }
 
   resolveWorkspaceDir(chatKey, chatId) {
+    const conversation = this.store.getConversation(chatKey);
     return (
+      conversation?.workspaceDir ||
       this.config.chatWorkspaceMappings.get(chatKey) ||
       this.config.chatWorkspaceMappings.get(chatId) ||
       this.config.codexWorkspaceDir
+    );
+  }
+
+  hasBoundWorkspace(chatKey, chatId) {
+    const conversation = this.store.getConversation(chatKey);
+    return Boolean(
+      conversation?.workspaceDir ||
+        this.config.chatWorkspaceMappings.get(chatKey) ||
+        this.config.chatWorkspaceMappings.get(chatId)
+    );
+  }
+
+  requiresWorkspaceBinding(chatKey, chatId) {
+    return chatKey.startsWith("group:") && !this.hasBoundWorkspace(chatKey, chatId);
+  }
+
+  workspaceBindingHelpText() {
+    return [
+      "当前群组还没有绑定工作目录，暂不执行任务。",
+      "请 @机器人 发送：`/bind <工作目录> [仓库名]`",
+      "例如：`/bind /home/jingqi/workspace/project-a project-a`",
+      "绑定时会在本地初始化 Git 仓库，并尝试通过已登录的 `gh` CLI 创建 GitHub 公共仓库；若已存在 `origin` 远端则跳过远端创建。",
+      "可先发送 `/status` 查看当前状态。"
+    ].join("\n");
+  }
+
+  async sendWorkspaceBindingPrompt(target, chatKey, chatId) {
+    const conversation = this.store.upsertConversation(chatKey, {
+      bindingPromptedAt: new Date().toISOString(),
+      bindingStatus: "pending",
+      workspaceDir: this.store.getConversation(chatKey)?.workspaceDir || ""
+    });
+
+    const lines = [
+      this.workspaceBindingHelpText(),
+      conversation?.workspaceDir ? `当前绑定：${conversation.workspaceDir}` : ""
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    await this.safeSend(
+      target || {
+        chatId,
+        replyToMessageId: ""
+      },
+      lines
     );
   }
 
@@ -691,10 +755,36 @@ export class BridgeService {
     ].join(":");
   }
 
+  async handleBotAddedEvent(eventEnvelope) {
+    if (this.rememberRecentEvent(extractEnvelopeEventId(eventEnvelope))) {
+      return;
+    }
+
+    const event = extractBotAddedEvent(eventEnvelope);
+    const chatId = event?.chat_id || "";
+    const chatKey = chatId ? `group:${chatId}` : "";
+    if (!chatId || !chatKey || this.hasBoundWorkspace(chatKey, chatId)) {
+      return;
+    }
+
+    await this.sendWorkspaceBindingPrompt(
+      {
+        chatId,
+        replyToMessageId: ""
+      },
+      chatKey,
+      chatId
+    );
+  }
+
   async dispatchEvent(eventEnvelope) {
     const eventType = extractEventType(eventEnvelope);
     if (eventType === "card.action.trigger") {
       await this.handleCardAction(eventEnvelope);
+      return null;
+    }
+    if (eventType === "im.chat.member.bot.added_v1") {
+      await this.handleBotAddedEvent(eventEnvelope);
       return null;
     }
 
@@ -747,6 +837,15 @@ export class BridgeService {
     const target = buildReplyTarget(this.config, event);
     if (!text) {
       await this.safeSend(target, helpText());
+      return null;
+    }
+
+    if (
+      event.message.chat_type !== "p2p" &&
+      !text.startsWith("/") &&
+      this.requiresWorkspaceBinding(chatKey, event.message.chat_id)
+    ) {
+      await this.sendWorkspaceBindingPrompt(target, chatKey, event.message.chat_id);
       return null;
     }
 
@@ -1164,6 +1263,61 @@ export class BridgeService {
     }
   }
 
+  async bindWorkspace({ chatId, chatKey, repoName, target, workspaceInput }) {
+    if (!workspaceInput) {
+      await this.safeSend(target, "用法：/bind <工作目录> [仓库名]");
+      return;
+    }
+
+    if (this.countPendingTasksForChat(chatKey) > 0) {
+      await this.safeSend(
+        target,
+        "当前聊天还有运行中或排队中的任务，暂时不能切换工作目录。请等待任务完成后再绑定。"
+      );
+      return;
+    }
+
+    let result;
+    try {
+      result = await this.prepareWorkspaceBinding(this.config, {
+        repoName,
+        workspaceInput
+      });
+    } catch (error) {
+      await this.safeSend(
+        target,
+        `工作目录绑定失败：${error.message || String(error)}`
+      );
+      return;
+    }
+    this.store.upsertConversation(chatKey, {
+      bindingPromptedAt: "",
+      bindingStatus: "bound",
+      lastContextUsageRatio: 0,
+      lastModelContextWindow: 0,
+      memoryFilePath: "",
+      repoName: result.repoName,
+      repoRemoteStatus: result.remoteStatus,
+      repoRemoteUrl: result.remoteUrl || "",
+      sessionId: "",
+      workspaceDir: result.workspaceDir
+    });
+
+    const lines = [
+      `已绑定工作目录：${result.workspaceDir}`,
+      `GitHub 仓库：${result.repoName}`,
+      result.gitInitialized ? "本地仓库：已初始化 Git 仓库" : "本地仓库：沿用现有 Git 仓库",
+      result.initialCommitCreated ? "初始化提交：已创建" : "初始化提交：已存在",
+      result.remoteStatus === "created"
+        ? `远端仓库：已创建 ${result.remoteUrl || "(origin 已配置)"}`
+        : result.remoteStatus === "existing"
+          ? `远端仓库：沿用现有 origin ${result.remoteUrl || ""}`.trim()
+          : `远端仓库：创建失败，${result.remoteError || "请检查 gh 配置后重试"}`,
+      "后续在当前群里启动的 Codex session 都会使用这个目录。"
+    ];
+    await this.safeSend(target, lines.join("\n"));
+  }
+
   async handleCommand({
     commandText,
     chatId,
@@ -1173,15 +1327,50 @@ export class BridgeService {
   }) {
     const [command, ...rest] = commandText.trim().split(/\s+/);
 
+    if (
+      this.requiresWorkspaceBinding(chatKey, chatId) &&
+      !["/bind", "/help", "/reset", "/status"].includes(command)
+    ) {
+      await this.sendWorkspaceBindingPrompt(target, chatKey, chatId);
+      return;
+    }
+
     if (command === "/help") {
       await this.safeSend(target, helpText());
       return;
     }
 
+    if (command === "/bind") {
+      await this.bindWorkspace({
+        chatId,
+        chatKey,
+        repoName: rest[1] || "",
+        target,
+        workspaceInput: rest[0] || ""
+      });
+      return;
+    }
+
     if (command === "/reset") {
-      this.store.clearConversation(chatKey);
+      const conversation = this.store.getConversation(chatKey);
+      if (conversation?.workspaceDir) {
+        this.store.upsertConversation(chatKey, {
+          bindingStatus: "bound",
+          lastContextUsageRatio: 0,
+          lastModelContextWindow: 0,
+          memoryFilePath: "",
+          sessionId: ""
+        });
+      } else {
+        this.store.clearConversation(chatKey);
+      }
       if (!silentSuccess) {
-        await this.safeSend(target, "已清空当前聊天绑定的 Codex 会话。");
+        await this.safeSend(
+          target,
+          conversation?.workspaceDir
+            ? "已清空当前聊天绑定的 Codex 会话，工作目录绑定保留。"
+            : "已清空当前聊天绑定的 Codex 会话。"
+        );
       }
       return;
     }
@@ -1196,9 +1385,16 @@ export class BridgeService {
         (task) => task.chatKey === chatKey
       ).length;
       const workspaceDir = this.resolveWorkspaceDir(chatKey, chatId);
+      const bindingState = chatKey.startsWith("group:")
+        ? this.requiresWorkspaceBinding(chatKey, chatId)
+          ? "待绑定"
+          : "已绑定"
+        : "私聊默认目录";
       const lines = [
         `chatKey: ${chatKey}`,
+        `binding: ${bindingState}`,
         `workspace: ${workspaceDir}`,
+        `repo: ${conversation?.repoRemoteUrl || "无"}`,
         `sessionId: ${conversation?.sessionId || "无"}`,
         `memoryFile: ${conversation?.memoryFilePath || "无"}`,
         `running: ${runningTask ? `${buildTaskName(runningTask)} (${runningTask.startedAt})` : "无"}`,
@@ -1250,7 +1446,7 @@ export class BridgeService {
     if (command === "/abort") {
       const taskReference = rest[0];
       if (!taskReference) {
-        await this.safeSend(target, "用法：/abort T001");
+        await this.safeSend(target, "用法：/abort T001 或 /abort T001-任务摘要");
         return;
       }
 

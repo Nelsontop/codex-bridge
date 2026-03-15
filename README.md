@@ -29,15 +29,17 @@
 
 - 支持飞书私聊文本消息
 - 支持群聊中 `@机器人` 后发送文本
+- 支持机器人首次进群时提示绑定工作目录
 - 支持聊天级别的会话恢复
 - 支持 reply-to-message，减少群聊串线
 - 支持共享卡片更新：任务接收、进度更新、完成/失败会收敛到同一张卡片
 - 支持带 `Abort` / `Reset Session` 按钮的消息卡片
 - 支持飞书消息事件和卡片动作的去重，避免平台重试或重复点击导致任务重复执行
-- 支持按会话映射不同工作目录
+- 支持按会话映射不同工作目录，以及通过 `/bind <目录> [仓库名]` 为群组持久化绑定目录
+- 支持群组绑定时本地初始化 Git 仓库，并通过已登录的 `gh` CLI 创建 GitHub 公共仓库
 - 支持任务结束后自动 Git 提交，再继续下一个任务
 - 支持同一聊天内任务串行、不同聊天按配置并行
-- 支持 `/help`、`/status`、`/reset`、`/abort <任务号>`、`/retry [任务号]`
+- 支持 `/help`、`/bind`、`/status`、`/reset`、`/abort <任务号>`、`/retry [任务号]`
 - 任务卡片标题统一使用 `Txxx` 任务号，避免长摘要挤占标题空间
 - `/abort` 可终止运行中任务或取消排队任务，`/retry` 可重试当前聊天中的中断任务
 - 支持本地状态持久化到 `.codex-feishu-bridge/state.json`，包含会话、任务编号、排队快照和重启中断任务
@@ -78,6 +80,7 @@ CONTEXT_MEMORY_LOAD_FRACTION=0.1
 CONTEXT_WINDOW_FALLBACK_TOKENS=128000
 
 CODEX_WORKSPACE_DIR=/home/jingqi/workspace/your-project
+GITHUB_REPO_OWNER=
 CHAT_WORKSPACE_MAPPINGS="group:oc_xxx=/home/jingqi/workspace/project-a;group:oc_yyy=/home/jingqi/workspace/project-b"
 CODEX_COMMAND="~/.local/bin/codex-proxy --dangerously-bypass-approvals-and-sandbox"
 CODEX_BIN=codex
@@ -100,11 +103,12 @@ AUTO_COMMIT_MESSAGE_PREFIX="bridge: save"
 ## 飞书侧配置
 
 1. 创建一个企业自建应用，并开启机器人能力
-2. 在事件与回调中添加事件：`im.message.receive_v1`
+2. 在事件与回调中添加事件：`im.message.receive_v1`、`im.chat.member.bot.added_v1`
 3. 如果启用卡片按钮，再额外订阅卡片按钮回调事件
 4. 在“订阅方式”中选择“使用长连接接收事件/回调”
 5. 不需要配置公网请求地址
 6. 把应用安装到企业，并确保机器人可以被私聊/被群聊 @
+7. 如果要自动创建 GitHub 公共仓库，请先在桥接服务所在机器执行 `gh auth login`
 
 ## 运行
 
@@ -135,6 +139,8 @@ curl http://127.0.0.1:3000/healthz
 开启 `FEISHU_REPLY_TO_MESSAGE_ENABLED=true` 后，桥接器会回复到原消息。开启 `FEISHU_INTERACTIVE_CARDS_ENABLED=true` 后，任务接收、进度和完成状态会复用同一张共享卡片；`/status` 也会返回交互卡片。
 
 `CHAT_WORKSPACE_MAPPINGS` 支持用 `chatKey=/abs/path` 或 `chat_id=/abs/path` 按会话映射工作目录，条目之间用分号分隔。开启 `AUTO_COMMIT_AFTER_TASK_ENABLED=true` 后，桥接器会在每个任务结束后先执行自动提交，再继续下一个任务；因此会强制串行执行任务。
+
+群聊首次收到 `im.chat.member.bot.added_v1` 事件后，机器人会提示先执行 `/bind <工作目录> [仓库名]`。绑定成功后，该群后续所有 Codex session 都会固定使用该目录；`/reset` 只会清空 session，不会取消目录绑定。`/bind` 会先确保本地目录是可用的 Git 仓库，再尝试用当前 `gh` 登录态创建 GitHub 公共仓库；如果目录已有 `origin`，则直接沿用现有远端。
 
 `FEISHU_REQUEST_TIMEOUT_MS`、`FEISHU_REQUEST_RETRIES` 和 `FEISHU_REQUEST_RETRY_DELAY_MS` 用于控制飞书 HTTP 请求的超时和重试。`MAX_QUEUED_TASKS_PER_CHAT`、`MAX_QUEUED_TASKS_PER_USER` 用于限制待处理任务数量，防止单个聊天或用户积压过多任务。
 

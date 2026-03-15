@@ -26,6 +26,7 @@ const MANAGED_ENV_SECTIONS = [
     title: "# Codex",
     entries: [
       ["CODEX_WORKSPACE_DIR", ""],
+      ["GITHUB_REPO_OWNER", ""],
       ["CODEX_BIN", "codex"],
       ["CODEX_COMMAND", ""],
       ["CODEX_SANDBOX", "workspace-write"],
@@ -141,11 +142,12 @@ export function buildSetupChecklist({ envFilePath }) {
     "下一步：",
     `1. 检查并补全 ${envFilePath} 里的配置值。`,
     "2. 在飞书开放平台创建企业自建应用，并开启机器人能力。",
-    "3. 订阅事件 `im.message.receive_v1` 和卡片按钮回调事件。",
+    "3. 订阅事件 `im.message.receive_v1`、`im.chat.member.bot.added_v1` 和卡片按钮回调事件。",
     "4. 在飞书后台把订阅方式切到“使用长连接接收事件/回调”。",
     "5. 把应用安装到企业，并确保机器人可以被私聊或被群聊 @。",
-    "6. 运行 `npm start` 启动桥接服务。",
-    "7. 用 `curl http://127.0.0.1:3000/healthz` 验证健康检查。"
+    "6. 先执行 `gh auth login`，确保本机已登录 GitHub。",
+    "7. 运行 `npm start` 启动桥接服务。",
+    "8. 用 `curl http://127.0.0.1:3000/healthz` 验证健康检查。"
   ].join("\n");
 }
 
@@ -206,6 +208,11 @@ export async function runSetupWizard({
       CODEX_WORKSPACE_DIR: await promptValue(rl, output, {
         defaultValue: existingEnv.CODEX_WORKSPACE_DIR || rootDir,
         label: "Codex 工作目录"
+      }),
+      GITHUB_REPO_OWNER: await promptValue(rl, output, {
+        defaultValue: existingEnv.GITHUB_REPO_OWNER || "",
+        label: "GitHub Owner（可留空，默认当前 gh 登录用户）",
+        optional: true
       }),
       CODEX_BIN: await promptValue(rl, output, {
         defaultValue: existingEnv.CODEX_BIN || "codex",
