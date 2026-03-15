@@ -423,6 +423,39 @@ test("abort command accepts the full task name", async () => {
   await waitFor(() => bridge.running.size === 0);
 });
 
+test("card action cancels a running task and skips auto commit", async () => {
+  const client = createClient();
+  const runner = createRunnerController();
+  let autoCommitCalls = 0;
+  const bridge = new BridgeService(
+    createConfig({ maxConcurrentTasks: 1 }),
+    createStore(),
+    client,
+    {
+      autoCommitWorkspace: async () => {
+        autoCommitCalls += 1;
+        return { status: "committed", commitId: "abc123" };
+      },
+      runCodexTask: runner.runCodexTask.bind(runner)
+    }
+  );
+
+  await bridge.dispatchEvent(loadFixture("message.receive_v1.json"));
+  await waitFor(() => bridge.running.size === 1);
+
+  const actionPayload = loadFixture("card.action.trigger.json");
+  actionPayload.event.action.value.taskId = "T001";
+  await bridge.dispatchEvent(actionPayload);
+
+  await waitFor(() => bridge.running.size === 0);
+
+  assert.equal(autoCommitCalls, 0);
+  assert.equal(
+    client.cardUpdates.some((update) => update.card.elements[0].text.content.includes("**状态**：已取消")),
+    true
+  );
+});
+
 test("flattened WS card action can cancel a queued task", async () => {
   const client = createClient();
   const runner = createRunnerController();
@@ -459,6 +492,30 @@ test("flattened WS card action can cancel a queued task", async () => {
     sessionId: "thread_1"
   });
   await waitFor(() => bridge.running.size === 0);
+});
+
+test("successful task with no changes omits auto commit summary", async () => {
+  const client = createClient();
+  const runner = createRunnerController();
+  const bridge = new BridgeService(
+    createConfig({ feishuInteractiveCardsEnabled: false }),
+    createStore(),
+    client,
+    {
+      autoCommitWorkspace: async () => ({ status: "skipped", reason: "no-changes" }),
+      runCodexTask: runner.runCodexTask.bind(runner)
+    }
+  );
+
+  await bridge.dispatchEvent(loadFixture("message.receive_v1.json"));
+
+  runner.pending[0].resolve({
+    finalMessage: "任务已经完成",
+    sessionId: "thread_new"
+  });
+  await waitFor(() => bridge.running.size === 0 && client.texts.length >= 2);
+
+  assert.equal(client.texts.at(-1).text.includes("自动提交："), false);
 });
 
 test("resumeRecoveredTasks restores queued snapshots and surfaces interrupted tasks", async () => {

@@ -1122,7 +1122,7 @@ export class BridgeService {
       return `已创建提交 ${result.commitId || "(unknown)"}`;
     }
     if (result.status === "skipped" && result.reason === "no-changes") {
-      return "没有检测到变更";
+      return "";
     }
     if (result.status === "skipped" && result.reason === "not-git-repo") {
       return "当前工作目录不是 Git 仓库";
@@ -1220,8 +1220,7 @@ export class BridgeService {
       task.status = task.abortRequested ? "cancelled" : "failed";
       task.lastErrorMessage = error.message || String(error);
       task.finalMessage = "";
-      const autoCommitResult = await this.autoCommitWorkspace(this.config, task);
-      task.autoCommitSummary = this.formatAutoCommitResult(autoCommitResult);
+      task.autoCommitSummary = "";
       await this.syncTaskCard(task);
 
       if (!this.config.feishuInteractiveCardsEnabled) {

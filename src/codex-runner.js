@@ -56,6 +56,7 @@ export function runCodexTask(config, { prompt, sessionId, onEvent, workspaceDir 
   const [command, ...commandArgs] = config.codexCommand;
   const child = spawn(command, [...commandArgs, ...args], {
     cwd: resolvedWorkspaceDir,
+    detached: process.platform !== "win32",
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -64,6 +65,37 @@ export function runCodexTask(config, { prompt, sessionId, onEvent, workspaceDir 
   let latestSessionId = sessionId || null;
   let lastAgentMessage = "";
   let stderr = "";
+  let escalationTimer = null;
+  let killTimer = null;
+
+  function clearCancelTimers() {
+    if (escalationTimer) {
+      clearTimeout(escalationTimer);
+      escalationTimer = null;
+    }
+    if (killTimer) {
+      clearTimeout(killTimer);
+      killTimer = null;
+    }
+  }
+
+  function signalChild(signal) {
+    if (resolved || !child.pid) {
+      return;
+    }
+
+    try {
+      if (process.platform !== "win32") {
+        process.kill(-child.pid, signal);
+      } else {
+        child.kill(signal);
+      }
+    } catch (error) {
+      if (error.code !== "ESRCH") {
+        throw error;
+      }
+    }
+  }
 
   const stdoutReader = readline.createInterface({ input: child.stdout });
   stdoutReader.on("line", (line) => {
@@ -98,9 +130,13 @@ export function runCodexTask(config, { prompt, sessionId, onEvent, workspaceDir 
   });
 
   const result = new Promise((resolve, reject) => {
-    child.once("error", reject);
+    child.once("error", (error) => {
+      clearCancelTimers();
+      reject(error);
+    });
     child.once("close", (code) => {
       resolved = true;
+      clearCancelTimers();
       if (code === 0) {
         resolve({
           sessionId: latestSessionId,
@@ -120,7 +156,13 @@ export function runCodexTask(config, { prompt, sessionId, onEvent, workspaceDir 
     result,
     cancel() {
       if (!resolved) {
-        child.kill("SIGTERM");
+        signalChild("SIGINT");
+        escalationTimer = setTimeout(() => {
+          signalChild("SIGTERM");
+        }, 1500);
+        killTimer = setTimeout(() => {
+          signalChild("SIGKILL");
+        }, 5000);
       }
     }
   };
