@@ -10,6 +10,9 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const RECENT_EVENT_TTL_MS = 5 * 60 * 1000;
+const MAX_RECENT_EVENTS = 500;
+
 function chatKeyFor(event) {
   return `${event.message.chat_type}:${event.message.chat_id}`;
 }
@@ -309,6 +312,10 @@ function extractMessageEvent(eventEnvelope) {
   return null;
 }
 
+function extractEnvelopeEventId(eventEnvelope) {
+  return eventEnvelope?.header?.event_id || eventEnvelope?.event_id || "";
+}
+
 function extractCardAction(eventEnvelope) {
   const event = eventEnvelope?.event || {};
   const action = event.action || eventEnvelope?.action;
@@ -407,12 +414,14 @@ export class BridgeService {
       dependencies.rollbackAutoCommitWorkspace || defaultRollbackAutoCommitWorkspace;
     this.metrics = {
       contextCompactionCount: 0,
+      duplicateEventCount: 0,
       queuedCancelCount: 0,
       recoveredInterruptedCount: 0,
       recoveredQueuedCount: 0,
       rejectedByChatLimit: 0,
       rejectedByUserLimit: 0
     };
+    this.recentEvents = new Map();
     this.running = new Map();
     this.hasResumedRecoveredTasks = false;
 
@@ -621,6 +630,67 @@ export class BridgeService {
     this.pumpQueue();
   }
 
+  pruneRecentEvents(now = Date.now()) {
+    for (const [key, expiresAt] of this.recentEvents) {
+      if (expiresAt > now) {
+        continue;
+      }
+      this.recentEvents.delete(key);
+    }
+
+    while (this.recentEvents.size > MAX_RECENT_EVENTS) {
+      const oldestKey = this.recentEvents.keys().next().value;
+      if (!oldestKey) {
+        break;
+      }
+      this.recentEvents.delete(oldestKey);
+    }
+  }
+
+  rememberRecentEvent(eventKey, now = Date.now()) {
+    if (!eventKey) {
+      return false;
+    }
+
+    this.pruneRecentEvents(now);
+    const expiresAt = this.recentEvents.get(eventKey);
+    if (expiresAt && expiresAt > now) {
+      this.metrics.duplicateEventCount += 1;
+      return true;
+    }
+
+    this.recentEvents.delete(eventKey);
+    this.recentEvents.set(eventKey, now + RECENT_EVENT_TTL_MS);
+    this.pruneRecentEvents(now);
+    return false;
+  }
+
+  buildMessageEventKey(eventEnvelope, event) {
+    const eventId = extractEnvelopeEventId(eventEnvelope);
+    if (eventId) {
+      return `event:${extractEventType(eventEnvelope) || "message"}:${eventId}`;
+    }
+    const messageId = event?.message?.message_id || "";
+    return messageId ? `message:${messageId}` : "";
+  }
+
+  buildCardActionEventKey(eventEnvelope, action) {
+    const eventId = extractEnvelopeEventId(eventEnvelope);
+    if (eventId) {
+      return `event:${extractEventType(eventEnvelope) || "card"}:${eventId}`;
+    }
+    if (!action) {
+      return "";
+    }
+    return [
+      "card",
+      action.name || "",
+      action.taskId || "",
+      action.replyToMessageId || "",
+      action.senderOpenId || ""
+    ].join(":");
+  }
+
   async dispatchEvent(eventEnvelope) {
     const eventType = extractEventType(eventEnvelope);
     if (eventType === "card.action.trigger") {
@@ -633,6 +703,10 @@ export class BridgeService {
       return null;
     }
     if (event.sender?.sender_type && event.sender.sender_type !== "user") {
+      return null;
+    }
+
+    if (this.rememberRecentEvent(this.buildMessageEventKey(eventEnvelope, event))) {
       return null;
     }
 
@@ -719,6 +793,10 @@ export class BridgeService {
   async handleCardAction(eventEnvelope) {
     const action = extractCardAction(eventEnvelope);
     if (!action) {
+      return;
+    }
+
+    if (this.rememberRecentEvent(this.buildCardActionEventKey(eventEnvelope, action))) {
       return;
     }
 
@@ -1549,6 +1627,7 @@ export class BridgeService {
       conversations: this.store.conversationCount(),
       interruptedTasks: this.interruptedTasks.length,
       contextCompactionCount: this.metrics.contextCompactionCount,
+      duplicateEventCount: this.metrics.duplicateEventCount,
       queuedCancelCount: this.metrics.queuedCancelCount,
       queuedTasks: this.queue.length,
       recoveredInterruptedCount: this.metrics.recoveredInterruptedCount,

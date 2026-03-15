@@ -209,6 +209,36 @@ test("dispatchEvent tolerates malformed text payloads", async () => {
   ]);
 });
 
+test("dispatchEvent ignores duplicate message events with the same source message id", async () => {
+  const client = createClient();
+  const runner = createRunnerController();
+  const bridge = new BridgeService(
+    createConfig(),
+    createStore(),
+    client,
+    {
+      autoCommitWorkspace: async () => ({ status: "disabled" }),
+      runCodexTask: runner.runCodexTask.bind(runner)
+    }
+  );
+
+  const payload = loadFixture("message.receive_v1.json");
+  await bridge.dispatchEvent(payload);
+  await bridge.dispatchEvent(payload);
+
+  assert.equal(client.cards.length, 1);
+  assert.equal(runner.calls.length, 1);
+  assert.equal(bridge.queue.length, 0);
+  assert.equal(bridge.running.size, 1);
+  assert.equal(bridge.getHealth().duplicateEventCount, 1);
+
+  runner.pending[0].resolve({
+    finalMessage: "done",
+    sessionId: "thread_dedup"
+  });
+  await waitFor(() => bridge.running.size === 0);
+});
+
 test("pumpQueue skips blocked tasks from the same chat", () => {
   const bridge = new BridgeService(createConfig(), createStore(), createClient());
   const startedTaskIds = [];
@@ -381,6 +411,40 @@ test("card action can cancel a queued task created from a real event payload", a
     sessionId: "thread_1"
   });
   await waitFor(() => bridge.running.size === 0);
+});
+
+test("duplicate card actions are ignored after the first cancel request", async () => {
+  const client = createClient();
+  const bridge = new BridgeService(
+    createConfig({ feishuInteractiveCardsEnabled: false }),
+    createStore(),
+    client
+  );
+  let cancelCalls = 0;
+
+  bridge.running.set("T0002", {
+    abortRequested: false,
+    chatKey: "p2p:oc_test_chat",
+    id: "T0002",
+    runner: {
+      cancel() {
+        cancelCalls += 1;
+      }
+    },
+    target: {
+      chatId: "oc_test_chat",
+      replyToMessageId: "om_source_message_1"
+    }
+  });
+
+  const payload = loadFixture("card.action.trigger.json");
+  payload.event.action.value.taskId = "T0002";
+
+  await bridge.dispatchEvent(payload);
+  await bridge.dispatchEvent(payload);
+
+  assert.equal(cancelCalls, 1);
+  assert.equal(bridge.getHealth().duplicateEventCount, 1);
 });
 
 test("abort command accepts the task id", async () => {
