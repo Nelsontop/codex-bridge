@@ -2,17 +2,7 @@
 
 一个本地桥接服务：通过飞书长连接接收机器人消息，把文本消息转成 `codex exec` / `codex exec resume` 任务，再把结果发回飞书。
 
-## 调研结论
-
-这版方案参考了 OpenClaw 的核心交互方式，但没有照搬其 Gateway/ACP 控制面，而是先做一层更轻的飞书桥接：
-
-- OpenClaw 对 ACP coding harness 的推荐形态是“线程或频道绑定一个外部 agent session，后续消息继续路由到同一个会话”。这正是远程控制 Codex 最关键的体验。来源：OpenClaw ACP Agents 文档 https://docs.openclaw.ai/tools/acp-agents
-- OpenClaw 的 thread-bound 设计说明也强调了“会话身份、线程绑定、路由决策、生命周期恢复”应作为控制面的核心。来源：https://docs.openclaw.ai/experiments/plans/acp-thread-bound-agents
-- 飞书官方 Node SDK 文档说明了两种接入方式：Webhook 事件订阅和长连接 WebSocket。为了贴近 OpenClaw 的本地常驻代理体验，当前实现已切到长连接模式。来源：https://github.com/larksuite/node-sdk
-- 同一份飞书官方文档确认了长连接的关键行为：本地客户端先调用 `/callback/ws/endpoint` 获取 `wss://...` 地址，再通过持久连接接收入站事件。来源：https://github.com/larksuite/node-sdk
-- 消息回发仍然走飞书消息 API `im.message.create`，用 `chat_id` 把执行结果发回原聊天。来源：https://github.com/larksuite/node-sdk
-
-## 最终方案
+## 实现方案
 
 ### 架构
 
