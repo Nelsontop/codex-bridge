@@ -17,6 +17,7 @@
 - 私聊或群聊里通过文本直接下发 Codex 任务
 - 同一聊天自动复用 Codex session
 - 群聊首次接入后，先通过 `/bind <工作目录> [仓库名]` 绑定固定工作目录
+- `/bind` 只能绑定到 `WORKSPACE_ALLOWED_ROOTS` 允许的目录范围内
 - 绑定时自动准备本地 Git 仓库，并尝试通过已登录的 `gh` CLI 创建 GitHub 公共仓库
 - 任务过程通过飞书共享卡片持续更新，支持 `/abort`、`/retry`、`/reset`
 - 本地持久化聊天状态、排队任务、上下文记忆和重启恢复信息
@@ -44,6 +45,8 @@ npm run setup
 ```
 
 向导会生成或补全项目根目录下的 `.env`。
+
+默认会把 `WORKSPACE_ALLOWED_ROOTS` 设为 `CODEX_WORKSPACE_DIR`，表示群组只能绑定到这个根目录及其子目录。需要放开额外目录时，再显式配置白名单。
 
 ### 3. 在飞书后台完成订阅配置
 
@@ -94,6 +97,12 @@ curl http://127.0.0.1:3000/healthz
 3. `/bind` 成功后，把这个群与本地目录持久化绑定
 4. 这个群后续所有任务都固定在该目录执行
 5. `/reset` 只清空 session，不取消目录绑定
+
+如果目录路径里有空格，可以这样写：
+
+```bash
+/bind "/home/jingqi/workspace/Project A" project-a
+```
 
 ## 实现方案
 

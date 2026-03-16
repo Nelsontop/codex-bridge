@@ -56,7 +56,7 @@ function asBoolean(value, fallback = false) {
 
 function asList(value) {
   return String(value || "")
-    .split(",")
+    .split(/[,\n;]/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
@@ -189,6 +189,9 @@ export function loadConfig(rootDir = process.cwd()) {
     rootDir,
     process.env.CODEX_WORKSPACE_DIR || rootDir
   );
+  const workspaceAllowedRoots = asList(process.env.WORKSPACE_ALLOWED_ROOTS).map((item) =>
+    path.resolve(rootDir, expandHome(item))
+  );
   const stateDir = path.resolve(
     rootDir,
     process.env.STATE_DIR || ".codex-feishu-bridge"
@@ -259,6 +262,8 @@ export function loadConfig(rootDir = process.cwd()) {
     codexBin: process.env.CODEX_BIN || "codex",
     codexCommand: resolveCodexCommand(),
     codexWorkspaceDir: workspaceDir,
+    workspaceAllowedRoots:
+      workspaceAllowedRoots.length > 0 ? workspaceAllowedRoots : [workspaceDir],
     chatWorkspaceMappings: parseWorkspaceMappings(
       process.env.CHAT_WORKSPACE_MAPPINGS,
       rootDir

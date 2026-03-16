@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { WorkspaceBindingPolicy } from "./workspace-policy.js";
 
 function run(command, args, cwd) {
   return new Promise((resolve, reject) => {
@@ -32,18 +33,6 @@ function run(command, args, cwd) {
       });
     });
   });
-}
-
-function resolveWorkspaceDir(config, workspaceInput) {
-  const normalized = String(workspaceInput || "").trim();
-  if (!normalized) {
-    throw new Error("缺少工作目录。用法：/bind <工作目录> [仓库名]");
-  }
-
-  if (path.isAbsolute(normalized)) {
-    return path.resolve(normalized);
-  }
-  return path.resolve(config.codexWorkspaceDir, normalized);
 }
 
 function normalizeRepoName(rawValue) {
@@ -212,7 +201,9 @@ async function createGitHubRepo(config, workspaceDir, repoName) {
 }
 
 export async function prepareWorkspaceBinding(config, { repoName, workspaceInput }) {
-  const workspaceDir = resolveWorkspaceDir(config, workspaceInput);
+  const workspaceDir = new WorkspaceBindingPolicy(config).resolveAuthorizedWorkspace(
+    workspaceInput
+  );
   const resolvedRepoName = resolveRepoName(workspaceDir, repoName);
 
   ensureWorkspaceDirectory(workspaceDir);

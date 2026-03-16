@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { runCodexTask as defaultRunCodexTask } from "./codex-runner.js";
 import { prepareWorkspaceBinding as defaultPrepareWorkspaceBinding } from "./workspace-binding.js";
+import { BridgeCommandRouter } from "./bridge-command-router.js";
+import { markTaskCompleted, markTaskFailed, markTaskRunning } from "./task-lifecycle.js";
+import { TaskRuntime } from "./task-runtime.js";
 import {
   autoCommitWorkspace as defaultAutoCommitWorkspace,
   rollbackAutoCommitWorkspace as defaultRollbackAutoCommitWorkspace
@@ -257,6 +260,16 @@ function extractTokenUsage(event) {
   };
 }
 
+function extractRunnerSessionId(event) {
+  if (event?.type === "thread.started" && typeof event.thread_id === "string") {
+    return event.thread_id;
+  }
+  if (event?.type === "session.configured" && typeof event.session_id === "string") {
+    return event.session_id;
+  }
+  return "";
+}
+
 function memoryFileNameForChat(chatKey) {
   return `${Buffer.from(chatKey).toString("base64url")}.md`;
 }
@@ -377,45 +390,6 @@ function taskStatusLabel(status) {
   return status || "未知";
 }
 
-function sanitizeTaskSnapshot(task) {
-  return {
-    autoCommitSummary: task.autoCommitSummary || "",
-    cardMessageId: task.cardMessageId || "",
-    chatKey: task.chatKey,
-    contextUsageRatio: task.contextUsageRatio || 0,
-    enqueuedAt: task.enqueuedAt,
-    finalMessage: task.finalMessage || "",
-    id: task.id,
-    lastErrorMessage: task.lastErrorMessage || "",
-    lastProgressText: task.lastProgressText || "",
-    nameSummary: task.nameSummary || summarizeTaskPrompt(task.prompt),
-    prompt: task.prompt,
-    recovered: Boolean(task.recovered),
-    modelContextWindow: task.modelContextWindow || 0,
-    senderOpenId: task.senderOpenId || "",
-    sessionId: task.sessionId || "",
-    startedAt: task.startedAt || "",
-    status: task.status,
-    target: {
-      chatId: task.target?.chatId || "",
-      replyToMessageId: task.target?.replyToMessageId || ""
-    },
-    workspaceDir: task.workspaceDir
-  };
-}
-
-function restoreTask(snapshot) {
-  return {
-    ...sanitizeTaskSnapshot(snapshot),
-    abortRequested: false,
-    completedCommandIds: new Set(),
-    lastStreamSentAt: 0,
-    startedCommandIds: new Set(),
-    status: snapshot.status || "queued",
-    streamChain: Promise.resolve()
-  };
-}
-
 export class BridgeService {
   constructor(config, store, feishuClient, dependencies = {}) {
     this.config = config;
@@ -438,16 +412,18 @@ export class BridgeService {
       rejectedByUserLimit: 0
     };
     this.recentEvents = new Map();
-    this.running = new Map();
+    this.runtime = new TaskRuntime(this.store);
+    this.running = this.runtime.running;
+    this.commandRouter = new BridgeCommandRouter(this, {
+      buildTaskName,
+      helpText,
+      matchesTaskReference
+    });
     this.hasResumedRecoveredTasks = false;
-
-    const runtime = this.store.getRuntimeSnapshot();
-    this.nextTaskNumber = runtime.nextTaskNumber || 1;
-    this.queue = (runtime.queue || []).map((task) => restoreTask(task));
-    this.interruptedTasks = (runtime.interrupted || []).map((task) => restoreTask(task));
+    this.queue = this.runtime.queue;
+    this.interruptedTasks = this.runtime.interruptedTasks;
     this.metrics.recoveredQueuedCount = this.queue.length;
     this.metrics.recoveredInterruptedCount = this.interruptedTasks.length;
-    this.persistRuntime();
   }
 
   resolveWorkspaceDir(chatKey, chatId) {
@@ -650,50 +626,23 @@ export class BridgeService {
   }
 
   persistRuntime() {
-    this.store.saveRuntimeSnapshot({
-      interrupted: this.interruptedTasks.map((task) => sanitizeTaskSnapshot(task)),
-      nextTaskNumber: this.nextTaskNumber,
-      queue: this.queue.map((task) => sanitizeTaskSnapshot(task)),
-      running: [...this.running.values()].map((task) => sanitizeTaskSnapshot(task))
-    });
+    this.runtime.persist();
   }
 
   countPendingTasksForChat(chatKey) {
-    const queuedCount = this.queue.filter((task) => task.chatKey === chatKey).length;
-    const runningCount = this.countRunningTasksForChat(chatKey);
-    return queuedCount + runningCount;
+    return this.runtime.countPendingTasksForChat(chatKey);
   }
 
   countRunningTasksForChat(chatKey) {
-    return [...this.running.values()].filter((task) => task.chatKey === chatKey).length;
+    return this.runtime.countRunningTasksForChat(chatKey);
   }
 
   countPendingTasksForUser(senderOpenId, chatKey = "") {
-    if (!senderOpenId) {
-      return 0;
-    }
-
-    const queuedCount = this.queue.filter(
-      (task) => task.senderOpenId === senderOpenId && (!chatKey || task.chatKey === chatKey)
-    ).length;
-    const runningCount = [...this.running.values()].filter(
-      (task) => task.senderOpenId === senderOpenId && (!chatKey || task.chatKey === chatKey)
-    ).length;
-    return queuedCount + runningCount;
+    return this.runtime.countPendingTasksForUser(senderOpenId, chatKey);
   }
 
   findQueuePositionForTask(task) {
-    let position = 0;
-    for (const queuedTask of this.queue) {
-      if (queuedTask.chatKey !== task.chatKey) {
-        continue;
-      }
-      position += 1;
-      if (queuedTask.id === task.id) {
-        return position;
-      }
-    }
-    return 0;
+    return this.runtime.findQueuePositionForTask(task);
   }
 
   async resumeRecoveredTasks() {
@@ -997,7 +946,7 @@ export class BridgeService {
       contextUsageRatio: 0,
       enqueuedAt: new Date().toISOString(),
       finalMessage: "",
-      id: formatTaskId(this.nextTaskNumber++),
+      id: this.runtime.createTaskId(),
       lastErrorMessage: "",
       lastProgressText: "",
       lastStreamSentAt: 0,
@@ -1018,95 +967,29 @@ export class BridgeService {
 
   enqueueTask(event, prompt, senderOpenId, target) {
     const task = this.createTask(event, prompt, senderOpenId, target);
-    this.queue.push(task);
-    this.persistRuntime();
-    return task;
+    return this.runtime.enqueue(task);
   }
 
   findInterruptedTask(chatKey, taskReference = "") {
     const normalized = String(taskReference || "").trim();
     if (!normalized) {
-      for (let index = this.interruptedTasks.length - 1; index >= 0; index -= 1) {
-        const task = this.interruptedTasks[index];
-        if (task.chatKey === chatKey) {
-          return { index, task };
-        }
-      }
-      return { index: -1, task: null };
+      return this.runtime.findInterruptedTask(chatKey);
     }
 
-    const index = this.interruptedTasks.findIndex(
-      (task) => task.chatKey === chatKey && matchesTaskReference(task, normalized)
+    return this.runtime.findInterruptedTask(
+      chatKey,
+      (task) => matchesTaskReference(task, normalized)
     );
-    return {
-      index,
-      task: index >= 0 ? this.interruptedTasks[index] : null
-    };
   }
 
   async retryInterruptedTask({ chatId, chatKey, taskReference = "", target, silentSuccess }) {
-    const pendingForChat = this.countPendingTasksForChat(chatKey);
-    if (pendingForChat >= this.config.maxQueuedTasksPerChat) {
-      this.metrics.rejectedByChatLimit += 1;
-      await this.safeSend(
-        target,
-        `当前聊天待处理任务已达上限（${this.config.maxQueuedTasksPerChat}）。请等待已有任务完成，或用 /abort <任务号> 取消排队任务。`
-      );
-      return;
-    }
-
-    const { index, task } = this.findInterruptedTask(chatKey, taskReference);
-    if (!task) {
-      await this.safeSend(
-        target,
-        taskReference
-          ? `当前聊天没有中断任务 ${taskReference}。`
-          : "当前聊天没有可重试的中断任务。"
-      );
-      return;
-    }
-
-    const pendingForUser = this.countPendingTasksForUser(task.senderOpenId, chatKey);
-    if (pendingForUser >= this.config.maxQueuedTasksPerUser) {
-      this.metrics.rejectedByUserLimit += 1;
-      await this.safeSend(
-        target,
-        `当前聊天内该用户待处理任务已达上限（${this.config.maxQueuedTasksPerUser}）。请等待已有任务完成，或取消排队中的任务。`
-      );
-      return;
-    }
-
-    this.interruptedTasks.splice(index, 1);
-    task.status = "queued";
-    task.recovered = true;
-    task.abortRequested = false;
-    task.autoCommitSummary = "";
-    task.contextUsageRatio = 0;
-    task.enqueuedAt = new Date().toISOString();
-    task.finalMessage = "";
-    task.lastErrorMessage = "";
-    task.lastProgressText = "任务已从中断状态重新入队。";
-    task.lastStreamSentAt = 0;
-    task.modelContextWindow = 0;
-    task.sessionId = "";
-    task.startedAt = "";
-    task.startedCommandIds = new Set();
-    task.completedCommandIds = new Set();
-    task.streamChain = Promise.resolve();
-    task.workspaceDir = task.workspaceDir || this.resolveWorkspaceDir(chatKey, chatId);
-    this.queue.push(task);
-    const queuePosition = this.findQueuePositionForTask(task);
-    this.persistRuntime();
-    await this.syncTaskCard(task);
-    await this.refreshQueuedTaskCards();
-    this.pumpQueue();
-
-    if (!silentSuccess) {
-      await this.safeSend(
-        target,
-        `已重试任务 ${buildTaskName(task)}，队列位置 ${queuePosition}。`
-      );
-    }
+    await this.commandRouter.retryInterruptedTask({
+      chatId,
+      chatKey,
+      taskReference,
+      target,
+      silentSuccess
+    });
   }
 
   buildTaskCard(task) {
@@ -1280,58 +1163,13 @@ export class BridgeService {
   }
 
   async bindWorkspace({ chatId, chatKey, repoName, target, workspaceInput }) {
-    if (!workspaceInput) {
-      await this.safeSend(target, "用法：/bind <工作目录> [仓库名]");
-      return;
-    }
-
-    if (this.countPendingTasksForChat(chatKey) > 0) {
-      await this.safeSend(
-        target,
-        "当前聊天还有运行中或排队中的任务，暂时不能切换工作目录。请等待任务完成后再绑定。"
-      );
-      return;
-    }
-
-    let result;
-    try {
-      result = await this.prepareWorkspaceBinding(this.config, {
-        repoName,
-        workspaceInput
-      });
-    } catch (error) {
-      await this.safeSend(
-        target,
-        `工作目录绑定失败：${error.message || String(error)}`
-      );
-      return;
-    }
-    this.store.upsertConversation(chatKey, {
-      bindingPromptedAt: "",
-      bindingStatus: "bound",
-      lastContextUsageRatio: 0,
-      lastModelContextWindow: 0,
-      memoryFilePath: "",
-      repoName: result.repoName,
-      repoRemoteStatus: result.remoteStatus,
-      repoRemoteUrl: result.remoteUrl || "",
-      sessionId: "",
-      workspaceDir: result.workspaceDir
+    await this.commandRouter.bindWorkspace({
+      chatId,
+      chatKey,
+      repoName,
+      target,
+      workspaceInput
     });
-
-    const lines = [
-      `已绑定工作目录：${result.workspaceDir}`,
-      `GitHub 仓库：${result.repoName}`,
-      result.gitInitialized ? "本地仓库：已初始化 Git 仓库" : "本地仓库：沿用现有 Git 仓库",
-      result.initialCommitCreated ? "初始化提交：已创建" : "初始化提交：已存在",
-      result.remoteStatus === "created"
-        ? `远端仓库：已创建 ${result.remoteUrl || "(origin 已配置)"}`
-        : result.remoteStatus === "existing"
-          ? `远端仓库：沿用现有 origin ${result.remoteUrl || ""}`.trim()
-          : `远端仓库：创建失败，${result.remoteError || "请检查 gh 配置后重试"}`,
-      "后续在当前群里启动的 Codex session 都会使用这个目录。"
-    ];
-    await this.safeSend(target, lines.join("\n"));
   }
 
   async handleCommand({
@@ -1341,189 +1179,25 @@ export class BridgeService {
     target,
     silentSuccess = false
   }) {
-    const [command, ...rest] = commandText.trim().split(/\s+/);
-
-    if (
-      this.requiresWorkspaceBinding(chatKey, chatId) &&
-      !["/bind", "/help", "/reset", "/status"].includes(command)
-    ) {
-      await this.sendWorkspaceBindingPrompt(target, chatKey, chatId);
-      return;
-    }
-
-    if (command === "/help") {
-      await this.safeSend(target, helpText());
-      return;
-    }
-
-    if (command === "/bind") {
-      await this.bindWorkspace({
-        chatId,
-        chatKey,
-        repoName: rest[1] || "",
-        target,
-        workspaceInput: rest[0] || ""
-      });
-      return;
-    }
-
-    if (command === "/reset") {
-      const conversation = this.store.getConversation(chatKey);
-      if (conversation?.workspaceDir) {
-        this.store.upsertConversation(chatKey, {
-          bindingStatus: "bound",
-          lastContextUsageRatio: 0,
-          lastModelContextWindow: 0,
-          memoryFilePath: "",
-          sessionId: ""
-        });
-      } else {
-        this.store.clearConversation(chatKey);
-      }
-      if (!silentSuccess) {
-        await this.safeSend(
-          target,
-          conversation?.workspaceDir
-            ? "已清空当前聊天绑定的 Codex 会话，工作目录绑定保留。"
-            : "已清空当前聊天绑定的 Codex 会话。"
-        );
-      }
-      return;
-    }
-
-    if (command === "/status") {
-      const conversation = this.store.getConversation(chatKey);
-      const runningTask = [...this.running.values()].find(
-        (task) => task.chatKey === chatKey
-      );
-      const queuedTasks = this.queue.filter((task) => task.chatKey === chatKey);
-      const interruptedCount = this.interruptedTasks.filter(
-        (task) => task.chatKey === chatKey
-      ).length;
-      const workspaceDir = this.resolveWorkspaceDir(chatKey, chatId);
-      const bindingState = chatKey.startsWith("group:")
-        ? this.requiresWorkspaceBinding(chatKey, chatId)
-          ? "待绑定"
-          : "已绑定"
-        : "私聊默认目录";
-      const lines = [
-        `chatKey: ${chatKey}`,
-        `binding: ${bindingState}`,
-        `workspace: ${workspaceDir}`,
-        `repo: ${conversation?.repoRemoteUrl || "无"}`,
-        `sessionId: ${conversation?.sessionId || "无"}`,
-        `memoryFile: ${conversation?.memoryFilePath || "无"}`,
-        `running: ${runningTask ? `${buildTaskName(runningTask)} (${runningTask.startedAt})` : "无"}`,
-        `queued: ${queuedTasks.map((task) => buildTaskName(task)).join(", ") || "无"}`,
-        `interrupted: ${interruptedCount}`
-      ];
-
-      if (this.config.feishuInteractiveCardsEnabled) {
-        await this.safeSendCard(target, {
-          config: {
-            wide_screen_mode: true
-          },
-          elements: [
-            {
-              tag: "div",
-              text: {
-                content: lines.join("\n"),
-                tag: "lark_md"
-              }
-            }
-          ],
-          header: {
-            template: "blue",
-            title: {
-              content: "当前状态",
-              tag: "plain_text"
-            }
-          }
-        });
-        return;
-      }
-
-      await this.safeSend(target, lines.join("\n"));
-      return;
-    }
-
-    if (command === "/retry") {
-      const taskReference = rest[0] || "";
-      await this.retryInterruptedTask({
-        chatId,
-        chatKey,
-        silentSuccess,
-        target,
-        taskReference
-      });
-      return;
-    }
-
-    if (command === "/abort") {
-      const taskReference = rest[0];
-      if (!taskReference) {
-        await this.safeSend(target, "用法：/abort T001 或 /abort T001-任务摘要");
-        return;
-      }
-
-      const runningTask =
-        this.running.get(taskReference) ||
-        [...this.running.values()].find((task) => matchesTaskReference(task, taskReference));
-      if (runningTask) {
-        if (runningTask.chatKey !== chatKey) {
-          await this.safeSend(target, `当前聊天没有运行中的任务 ${taskReference}。`);
-          return;
-        }
-
-        runningTask.abortRequested = true;
-        console.log(`[task:${runningTask.id}] abort requested`);
-        runningTask.runner.cancel();
-        runningTask.lastErrorMessage = "收到终止请求，正在结束任务。";
-        await this.syncTaskCard(runningTask);
-        if (!silentSuccess) {
-          await this.safeSend(target, `已请求终止任务 ${buildTaskName(runningTask)}。`);
-        }
-        return;
-      }
-
-      const queuedIndex = this.queue.findIndex(
-        (task) => task.chatKey === chatKey && matchesTaskReference(task, taskReference)
-      );
-      if (queuedIndex >= 0) {
-        const [queuedTask] = this.queue.splice(queuedIndex, 1);
-        queuedTask.status = "cancelled";
-        queuedTask.lastErrorMessage = "任务在排队阶段被取消。";
-        this.metrics.queuedCancelCount += 1;
-        await this.syncTaskCard(queuedTask);
-        this.persistRuntime();
-        await this.refreshQueuedTaskCards();
-        if (!silentSuccess) {
-          await this.safeSend(target, `已取消排队中的任务 ${buildTaskName(queuedTask)}。`);
-        }
-        return;
-      }
-
-      await this.safeSend(target, `未找到任务 ${taskReference}。`);
-      return;
-    }
-
-    await this.safeSend(target, `未知命令：${command}\n\n${helpText()}`);
+    await this.commandRouter.handle({
+      commandText,
+      chatId,
+      chatKey,
+      target,
+      silentSuccess
+    });
   }
 
   hasRunningTaskForChat(chatKey) {
-    return [...this.running.values()].some((task) => task.chatKey === chatKey);
+    return this.runtime.hasRunningTaskForChat(chatKey);
   }
 
   pumpQueue() {
     while (this.queue.length > 0) {
-      const nextTaskIndex = this.queue.findIndex(
-        (task) => this.countRunningTasksForChat(task.chatKey) < this.config.maxConcurrentTasks
-      );
-      if (nextTaskIndex < 0) {
+      const task = this.runtime.dequeueNextRunnable(this.config.maxConcurrentTasks);
+      if (!task) {
         return;
       }
-
-      const [task] = this.queue.splice(nextTaskIndex, 1);
       this.runTask(task).catch((error) => {
         console.error(`[task:${task.id}] unexpected error`, error);
       });
@@ -1563,6 +1237,12 @@ export class BridgeService {
   }
 
   handleRunnerEvent(task, event) {
+    const sessionId = extractRunnerSessionId(event);
+    if (sessionId && task.sessionId !== sessionId) {
+      task.sessionId = sessionId;
+      this.persistRuntime();
+    }
+
     const tokenUsage = extractTokenUsage(event);
     if (tokenUsage) {
       task.contextUsageRatio = Math.max(task.contextUsageRatio, tokenUsage.ratio);
@@ -1674,26 +1354,18 @@ export class BridgeService {
   }
 
   async finalizeTask(task) {
-    this.running.delete(task.id);
-    this.persistRuntime();
+    this.runtime.finish(task.id);
     await this.refreshQueuedTaskCards();
     this.pumpQueue();
   }
 
   async runTask(task) {
-    task.status = "running";
-    task.startedAt = new Date().toISOString();
-    task.streamChain = Promise.resolve();
-    task.lastStreamSentAt = 0;
-    task.lastProgressText = task.recovered
-      ? "服务重启后恢复排队，任务已继续执行。"
-      : "任务已开始执行。";
-    task.startedCommandIds = new Set();
-    task.completedCommandIds = new Set();
+    markTaskRunning(task);
 
     const conversation = this.store.getConversation(task.chatKey);
     const sessionId =
-      conversation?.workspaceDir === task.workspaceDir ? conversation?.sessionId || null : null;
+      task.sessionId ||
+      (conversation?.workspaceDir === task.workspaceDir ? conversation?.sessionId || null : null);
     const runner = this.runCodexTask(this.config, {
       onEvent: (event) => {
         this.handleRunnerEvent(task, event);
@@ -1704,9 +1376,8 @@ export class BridgeService {
     });
 
     task.runner = runner;
-    this.running.set(task.id, task);
+    this.runtime.start(task);
     task.recovered = false;
-    this.persistRuntime();
     await this.syncTaskCard(task);
 
     let autoCommitResult = null;
@@ -1714,10 +1385,7 @@ export class BridgeService {
       const result = await runner.result;
       await task.streamChain;
       this.ensureTaskNotAborted(task);
-      task.status = "completed";
-      task.sessionId = result.sessionId || "";
-      task.finalMessage = result.finalMessage;
-      task.lastErrorMessage = "";
+      markTaskCompleted(task, result);
       this.store.upsertConversation(task.chatKey, {
         lastContextUsageRatio: task.contextUsageRatio,
         lastModelContextWindow: task.modelContextWindow || 0,
@@ -1765,13 +1433,7 @@ export class BridgeService {
       }
     } catch (error) {
       await task.streamChain;
-      task.status = task.abortRequested ? "cancelled" : "failed";
-      task.lastErrorMessage =
-        task.abortRequested && task.lastErrorMessage
-          ? task.lastErrorMessage
-          : error.message || String(error);
-      task.finalMessage = "";
-      task.autoCommitSummary = "";
+      markTaskFailed(task, error);
       if (task.abortRequested && autoCommitResult?.status === "committed") {
         const rollbackResult = await this.rollbackAutoCommitWorkspace(
           this.config,

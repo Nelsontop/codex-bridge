@@ -26,6 +26,7 @@ const MANAGED_ENV_SECTIONS = [
     title: "# Codex",
     entries: [
       ["CODEX_WORKSPACE_DIR", ""],
+      ["WORKSPACE_ALLOWED_ROOTS", ""],
       ["GITHUB_REPO_OWNER", ""],
       ["CODEX_BIN", "codex"],
       ["CODEX_COMMAND", ""],
@@ -208,6 +209,13 @@ export async function runSetupWizard({
       CODEX_WORKSPACE_DIR: await promptValue(rl, output, {
         defaultValue: existingEnv.CODEX_WORKSPACE_DIR || rootDir,
         label: "Codex 工作目录"
+      }),
+      WORKSPACE_ALLOWED_ROOTS: await promptValue(rl, output, {
+        defaultValue:
+          existingEnv.WORKSPACE_ALLOWED_ROOTS ||
+          existingEnv.CODEX_WORKSPACE_DIR ||
+          rootDir,
+        label: "允许绑定的工作目录根路径（逗号分隔）"
       }),
       GITHUB_REPO_OWNER: await promptValue(rl, output, {
         defaultValue: existingEnv.GITHUB_REPO_OWNER || "",

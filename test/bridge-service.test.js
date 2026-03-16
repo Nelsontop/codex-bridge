@@ -69,6 +69,7 @@ function createConfig(overrides = {}) {
     maxReplyChars: 200,
     requireMentionInGroup: true,
     taskAckEnabled: true,
+    workspaceAllowedRoots: ["/tmp"],
     ...overrides
   };
 }
@@ -164,6 +165,9 @@ function createRunnerController() {
         args,
         cancel() {
           rejectResult(new Error("cancelled by test"));
+        },
+        emit(event) {
+          args.onEvent?.(event);
         },
         reject: rejectResult,
         resolve: resolveResult
@@ -341,6 +345,77 @@ test("bind command stores the group workspace and later tasks use it", async () 
     sessionId: "thread_group_workspace"
   });
   await waitFor(() => bridge.running.size === 0);
+});
+
+test("bind command supports quoted workspace paths", async () => {
+  const client = createClient();
+  const store = createStore();
+  const bridge = new BridgeService(
+    createConfig({
+      feishuInteractiveCardsEnabled: false,
+      requireMentionInGroup: false,
+      workspaceAllowedRoots: ["/tmp"]
+    }),
+    store,
+    client,
+    {
+      prepareWorkspaceBinding: async (_config, args) => ({
+        gitInitialized: true,
+        initialCommitCreated: true,
+        remoteStatus: "existing",
+        remoteUrl: "git@github.com:demo/project-a.git",
+        repoName: "project-a",
+        workspaceDir: args.workspaceInput
+      })
+    }
+  );
+
+  await bridge.handleCommand({
+    commandText: '/bind "/tmp/Project A" project-a',
+    chatId: "oc_group_workspace_quoted",
+    chatKey: "group:oc_group_workspace_quoted",
+    target: {
+      chatId: "oc_group_workspace_quoted",
+      replyToMessageId: "om_bind_quoted"
+    }
+  });
+
+  assert.equal(
+    store.getConversation("group:oc_group_workspace_quoted").workspaceDir,
+    "/tmp/Project A"
+  );
+});
+
+test("bind command rejects workspaces outside allowed roots", async () => {
+  const client = createClient();
+  const bridge = new BridgeService(
+    createConfig({
+      feishuInteractiveCardsEnabled: false,
+      requireMentionInGroup: false
+    }),
+    createStore(),
+    client,
+    {
+      prepareWorkspaceBinding: async () => {
+        throw new Error("工作目录不在允许范围内：/etc。允许范围：/tmp");
+      }
+    }
+  );
+
+  await bridge.handleCommand({
+    commandText: "/bind /etc project-a",
+    chatId: "oc_group_workspace_denied",
+    chatKey: "group:oc_group_workspace_denied",
+    target: {
+      chatId: "oc_group_workspace_denied",
+      replyToMessageId: "om_bind_denied"
+    }
+  });
+
+  assert.equal(
+    client.texts.at(-1).text,
+    "工作目录绑定失败：工作目录不在允许范围内：/etc。允许范围：/tmp"
+  );
 });
 
 test("reset clears the session but preserves the bound workspace", async () => {
@@ -1161,6 +1236,78 @@ test("retry command retries the latest interrupted task in the current chat", as
     sessionId: "thread_retry"
   });
   await waitFor(() => bridge.running.size === 0);
+});
+
+test("running task persists discovered session id and retry resumes it after restart", async () => {
+  const client = createClient();
+  const runner = createRunnerController();
+  const store = createStore();
+  const bridge = new BridgeService(
+    createConfig({ feishuInteractiveCardsEnabled: false }),
+    store,
+    client,
+    {
+      autoCommitWorkspace: async () => ({ status: "disabled" }),
+      runCodexTask: runner.runCodexTask.bind(runner)
+    }
+  );
+
+  await bridge.dispatchEvent(loadFixture("message.receive_v1.json"));
+  await waitFor(() => bridge.running.size === 1);
+
+  runner.pending[0].emit({
+    thread_id: "thread_live_resume",
+    type: "thread.started"
+  });
+
+  assert.equal(bridge.running.get("T001").sessionId, "thread_live_resume");
+  assert.equal(store.getRuntimeSnapshot().running[0].sessionId, "thread_live_resume");
+
+  const persistedRuntime = store.getRuntimeSnapshot();
+  const recoveredStore = createStore({
+    runtime: {
+      interrupted: persistedRuntime.running.map((task) => ({
+        ...task,
+        lastErrorMessage: task.lastErrorMessage || "服务重启时任务被中断，未自动继续执行。",
+        status: "interrupted"
+      })),
+      nextTaskNumber: persistedRuntime.nextTaskNumber,
+      queue: persistedRuntime.queue,
+      running: []
+    }
+  });
+
+  const recoveredBridge = new BridgeService(
+    createConfig({ feishuInteractiveCardsEnabled: false }),
+    recoveredStore,
+    createClient(),
+    {
+      autoCommitWorkspace: async () => ({ status: "disabled" }),
+      runCodexTask: runner.runCodexTask.bind(runner)
+    }
+  );
+
+  assert.equal(recoveredBridge.interruptedTasks.length, 1);
+  assert.equal(recoveredBridge.interruptedTasks[0].sessionId, "thread_live_resume");
+
+  await recoveredBridge.handleCommand({
+    commandText: "/retry",
+    chatId: "oc_test_chat",
+    chatKey: "p2p:oc_test_chat",
+    target: {
+      chatId: "oc_test_chat",
+      replyToMessageId: "om_source_message_retry_resume"
+    }
+  });
+
+  assert.equal(runner.calls.length, 2);
+  assert.equal(runner.calls[1].sessionId, "thread_live_resume");
+
+  runner.pending[1].resolve({
+    finalMessage: "retried done",
+    sessionId: "thread_live_resume"
+  });
+  await waitFor(() => recoveredBridge.running.size === 0);
 });
 
 test("card action can retry an interrupted task", async () => {

@@ -28,13 +28,15 @@ test("buildEnvFileText preserves unknown keys and updates managed ones", () => {
     {
       FEISHU_APP_ID: "cli_new",
       FEISHU_APP_SECRET: "secret value",
-      CODEX_WORKSPACE_DIR: "/tmp/project"
+      CODEX_WORKSPACE_DIR: "/tmp/project",
+      WORKSPACE_ALLOWED_ROOTS: "/tmp/project,/tmp/sandboxes"
     }
   );
 
   assert.equal(text.includes("FEISHU_APP_ID=cli_new"), true);
   assert.equal(text.includes("FEISHU_APP_SECRET=\"secret value\""), true);
   assert.equal(text.includes("CODEX_WORKSPACE_DIR=/tmp/project"), true);
+  assert.equal(text.includes("WORKSPACE_ALLOWED_ROOTS=\"/tmp/project,/tmp/sandboxes\""), true);
   assert.equal(text.includes("CUSTOM_FLAG=1"), true);
 });
 
