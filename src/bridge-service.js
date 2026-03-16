@@ -520,7 +520,7 @@ export class BridgeService {
     return [
       "当前群组还没有绑定工作目录，暂不执行任务。",
       "请 @机器人 发送：`/bind <工作目录> [仓库名]`",
-      "例如：`/bind /home/jingqi/workspace/project-a project-a`",
+      "例如：`/bind /vol3/1000/workspace/project-a project-a`",
       "绑定时会在本地初始化 Git 仓库，并尝试通过已登录的 `gh` CLI 创建 GitHub 公共仓库；若已存在 `origin` 远端则跳过远端创建。",
       "可先发送 `/status` 查看当前状态。"
     ].join("\n");

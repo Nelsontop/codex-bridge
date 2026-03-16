@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This repository is a small Node.js bridge service that connects Feishu messages to local `codex exec` sessions. Runtime code lives in [`src/`](/home/jingqi/workspace/codex-bridge/src): `index.js` boots the process, `bridge-service.js` handles routing and task queues, `codex-runner.js` spawns Codex, and the Feishu transport is split across `feishu-client.js` and `feishu-ws-client.js`. Persistent local state is written to `.codex-feishu-bridge/state.json`. Vendored third-party SDK code is kept under `.vendor/`; treat it as upstream code and avoid editing it unless you are intentionally updating the vendor snapshot.
+This repository is a small Node.js bridge service that connects Feishu messages to local `codex exec` sessions. Runtime code lives in [`src/`](/vol3/1000/workspace/codex-bridge/src): `index.js` boots the process, `bridge-service.js` handles routing and task queues, `codex-runner.js` spawns Codex, and the Feishu transport is split across `feishu-client.js` and `feishu-ws-client.js`. Persistent local state is written to `.codex-feishu-bridge/state.json`. Vendored third-party SDK code is kept under `.vendor/`; treat it as upstream code and avoid editing it unless you are intentionally updating the vendor snapshot.
 
 ## Build, Test, and Development Commands
 There is no build step. Use Node 18.18+.
@@ -11,7 +11,7 @@ There is no build step. Use Node 18.18+.
 - `npm run dev`: start the service in watch mode for local iteration.
 - `curl http://127.0.0.1:3000/healthz`: verify the optional health server after startup.
 
-Set secrets and runtime options in a local `.env` file as documented in [`README.md`](/home/jingqi/workspace/codex-bridge/README.md).
+Set secrets and runtime options in a local `.env` file as documented in [`README.md`](/vol3/1000/workspace/codex-bridge/README.md).
 
 ## Coding Style & Naming Conventions
 Follow the existing plain JavaScript ESM style: 2-space indentation, semicolons, double quotes, and small focused modules. Use `camelCase` for functions and variables, `PascalCase` for classes, and kebab-case file names such as `feishu-ws-client.js`. Prefer Node built-ins and simple synchronous filesystem code where startup or state persistence is involved. Keep user-facing reply text concise and preserve the current command names (`/help`, `/status`, `/reset`, `/abort`).

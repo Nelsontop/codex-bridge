@@ -101,7 +101,7 @@ curl http://127.0.0.1:3000/healthz
 如果目录路径里有空格，可以这样写：
 
 ```bash
-/bind "/home/jingqi/workspace/Project A" project-a
+/bind "/vol3/1000/workspace/Project A" project-a
 ```
 
 ## 实现方案
@@ -369,12 +369,12 @@ gh auth login
 ### 群组绑定示例
 
 ```text
-/bind /home/jingqi/workspace/project-a project-a
+/bind /vol3/1000/workspace/project-a project-a
 ```
 
 含义：
 
-- 当前群后续任务固定在 `/home/jingqi/workspace/project-a`
+- 当前群后续任务固定在 `/vol3/1000/workspace/project-a`
 - 仓库名使用 `project-a`
 - 如果目录不是 Git 仓库，会自动初始化
 - 如果还没有 `origin`，会尝试创建 GitHub 公共仓库并推送
