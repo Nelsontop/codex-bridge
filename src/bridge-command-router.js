@@ -254,11 +254,15 @@ export class BridgeCommandRouter {
         return;
       }
 
+      const matchedRunningEntries = [...this.bridge.running.entries()].filter(([runtimeKey, task]) =>
+        taskReference === runtimeKey ||
+        this.helpers.matchesTaskReference(task, taskReference) ||
+        String(task?.id || "") === taskReference
+      );
       const runningTask =
-        this.bridge.running.get(taskReference) ||
-        [...this.bridge.running.values()].find((task) =>
-          this.helpers.matchesTaskReference(task, taskReference)
-        );
+        matchedRunningEntries.find(([, task]) => task.chatKey === chatKey)?.[1] ||
+        matchedRunningEntries[0]?.[1] ||
+        null;
       if (runningTask) {
         if (runningTask.chatKey !== chatKey) {
           await this.bridge.safeSend(target, `当前聊天没有运行中的任务 ${taskReference}。`);

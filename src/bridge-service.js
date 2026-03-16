@@ -1646,7 +1646,7 @@ export class BridgeService {
   }
 
   async finalizeTask(task) {
-    this.runtime.finish(task.id);
+    this.runtime.finish(task);
     await this.refreshQueuedTaskCards();
     this.pumpQueue();
   }

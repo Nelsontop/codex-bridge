@@ -1421,7 +1421,7 @@ test("running task persists discovered session id and retry resumes it after res
     type: "thread.started"
   });
 
-  assert.equal(bridge.running.get("T001").sessionId, "thread_live_resume");
+  assert.equal([...bridge.running.values()][0].sessionId, "thread_live_resume");
   assert.equal(store.getRuntimeSnapshot().running[0].sessionId, "thread_live_resume");
 
   const persistedRuntime = store.getRuntimeSnapshot();
@@ -1432,7 +1432,7 @@ test("running task persists discovered session id and retry resumes it after res
         lastErrorMessage: task.lastErrorMessage || "服务重启时任务被中断，未自动继续执行。",
         status: "interrupted"
       })),
-      nextTaskNumber: persistedRuntime.nextTaskNumber,
+      nextTaskNumbers: persistedRuntime.nextTaskNumbers,
       queue: persistedRuntime.queue,
       running: []
     }

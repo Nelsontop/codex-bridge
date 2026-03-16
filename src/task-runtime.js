@@ -63,6 +63,14 @@ function restoreTask(snapshot) {
   };
 }
 
+function buildRunningTaskKey(taskOrId, chatKey = "") {
+  if (typeof taskOrId === "string") {
+    return `${String(chatKey || "").trim()}::${taskOrId}`;
+  }
+
+  return `${String(taskOrId?.chatKey || "").trim()}::${String(taskOrId?.id || "").trim()}`;
+}
+
 export class TaskRuntime {
   constructor(store) {
     this.store = store;
@@ -99,12 +107,12 @@ export class TaskRuntime {
   }
 
   start(task) {
-    this.running.set(task.id, task);
+    this.running.set(buildRunningTaskKey(task), task);
     this.persist();
   }
 
-  finish(taskId) {
-    this.running.delete(taskId);
+  finish(taskOrId, chatKey = "") {
+    this.running.delete(buildRunningTaskKey(taskOrId, chatKey));
     this.persist();
   }
 
