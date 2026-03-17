@@ -19,6 +19,7 @@ const DEFAULTS = {
   autoCommitAfterTaskEnabled: false,
   autoCommitMessagePrefix: "bridge: save",
   channelProvider: "feishu",
+  claudeCodeCommand: "claude",
   cliProvider: "codex",
   codexApprovalPolicy: "never",
   codexCommand: "codex",
@@ -212,6 +213,16 @@ function resolveCodexCommand() {
   return [expandHome(DEFAULTS.codexCommand)];
 }
 
+function resolveCustomCommand(value, fallback) {
+  const configuredCommand = value || "";
+  const parsedCommand = splitCommand(configuredCommand);
+  if (parsedCommand.length > 0) {
+    parsedCommand[0] = expandHome(parsedCommand[0]);
+    return parsedCommand;
+  }
+  return [expandHome(fallback)];
+}
+
 function requireEnv(name) {
   const value = process.env[name];
   if (!value) {
@@ -336,6 +347,10 @@ export function loadConfig(rootDir = process.cwd()) {
     githubRepoOwner: process.env.GITHUB_REPO_OWNER || "",
     channelProvider,
     cliProvider,
+    claudeCodeCommand: [
+      ...resolveCustomCommand(process.env.CLAUDE_CODE_COMMAND, DEFAULTS.claudeCodeCommand),
+      ...asArgs(process.env.CLAUDE_CODE_ADDITIONAL_ARGS)
+    ],
     codexCommand: resolveCodexCommand(),
     codexWorkspaceDir: workspaceDir,
     workspaceAllowedRoots:

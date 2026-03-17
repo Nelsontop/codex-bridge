@@ -7,12 +7,18 @@ import {
 
 test("builtin CLI provider registry contains all configured providers", () => {
   const registry = createBuiltinCliProviderRegistry(
-    { codexWorkspaceDir: "/tmp/workspace" },
+    { codexWorkspaceDir: "/tmp/workspace", claudeCodeCommand: ["claude"] },
     {
       runCodexTask() {
         return {
           cancel() {},
           result: Promise.resolve({ finalMessage: "ok", sessionId: "thread" })
+        };
+      },
+      runGenericCliTask() {
+        return {
+          cancel() {},
+          result: Promise.resolve({ finalMessage: "ok", sessionId: "" })
         };
       }
     }
@@ -23,18 +29,24 @@ test("builtin CLI provider registry contains all configured providers", () => {
 
 test("stub CLI providers fail with explicit not implemented message", () => {
   const registry = createBuiltinCliProviderRegistry(
-    { codexWorkspaceDir: "/tmp/workspace" },
+    { codexWorkspaceDir: "/tmp/workspace", claudeCodeCommand: ["claude"] },
     {
       runCodexTask() {
         return {
           cancel() {},
           result: Promise.resolve({ finalMessage: "ok", sessionId: "thread" })
         };
+      },
+      runGenericCliTask() {
+        return {
+          cancel() {},
+          result: Promise.resolve({ finalMessage: "ok", sessionId: "" })
+        };
       }
     }
   );
 
-  for (const name of ["claude-code", "opencode", "kimi-cli"]) {
+  for (const name of ["opencode", "kimi-cli"]) {
     const provider = registry.get(name);
     assert.throws(() => provider.runTask({ prompt: "hi" }), /pending|unavailable/);
   }

@@ -168,6 +168,7 @@ AUTO_COMMIT_MESSAGE_PREFIX="bridge: save"
 - `CODEX_COMMAND`：覆盖默认 `codex` 启动命令，支持带参数
 - `CLI_PROVIDER`：选择当前全局 CLI provider（`codex` 可用；`claude-code` / `opencode` / `kimi-cli` 为预留骨架）
 - `CHANNEL_PROVIDER`：选择当前接入渠道（`feishu` 可用；`dingtalk` / `telegram` 为预留骨架）
+- `CLAUDE_CODE_COMMAND` / `CLAUDE_CODE_ADDITIONAL_ARGS`：配置 `claude-code` provider 的命令与附加参数
 - `CODEX_MODEL` / `CODEX_PROFILE`：需要固定模型或 profile 时再填
 
 ### 可选调优项

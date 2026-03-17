@@ -17,7 +17,11 @@ export function registerBuiltinCliProviders(registry, config, dependencies = {})
       runCodexTask: dependencies.runCodexTask
     })
   );
-  registry.register(createClaudeCodeProvider());
+  registry.register(
+    createClaudeCodeProvider(config, {
+      runGenericCliTask: dependencies.runGenericCliTask
+    })
+  );
   registry.register(createOpencodeProvider());
   registry.register(createKimiCliProvider());
   return registry;

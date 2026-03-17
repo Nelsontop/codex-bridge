@@ -40,6 +40,8 @@ function baseEnv(rootDir) {
     FEISHU_APP_ID: "cli_test",
     FEISHU_APP_SECRET: "secret_test",
     CODEX_WORKSPACE_DIR: rootDir,
+    CLAUDE_CODE_COMMAND: undefined,
+    CLAUDE_CODE_ADDITIONAL_ARGS: undefined,
     CHANNEL_PROVIDER: undefined,
     CLI_PROVIDER: undefined
   };
@@ -117,6 +119,22 @@ test("loadConfig validates CHANNEL_PROVIDER", () => {
     },
     () => {
       assert.throws(() => loadConfig(rootDir), /Unsupported CHANNEL_PROVIDER/);
+    }
+  );
+});
+
+test("loadConfig resolves CLAUDE_CODE command and additional args", () => {
+  const rootDir = makeRoot("config-claude-command-");
+
+  withEnv(
+    {
+      ...baseEnv(rootDir),
+      CLAUDE_CODE_COMMAND: "claude",
+      CLAUDE_CODE_ADDITIONAL_ARGS: "--print --json"
+    },
+    () => {
+      const config = loadConfig(rootDir);
+      assert.deepEqual(config.claudeCodeCommand, ["claude", "--print", "--json"]);
     }
   );
 });
