@@ -5,6 +5,12 @@ import { FeishuClient } from "./feishu-client.js";
 import { BridgeService } from "./bridge-service.js";
 import { FeishuWsClient } from "./feishu-ws-client.js";
 import { buildMissingConfigGuide, runSetupWizard } from "./init-guide.js";
+import {
+  buildSystemdUserService,
+  getSystemdUserServicePath,
+  installSystemdUserService,
+  removeSystemdUserService
+} from "./systemd-user-service.js";
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -16,6 +22,28 @@ async function main() {
   const command = process.argv[2] || "";
   if (command === "setup" || command === "init") {
     await runSetupWizard({ rootDir: process.cwd() });
+    return;
+  }
+  if (command === "service-print") {
+    process.stdout.write(buildSystemdUserService({ rootDir: process.cwd() }));
+    return;
+  }
+  if (command === "service-install") {
+    const servicePath = installSystemdUserService({ rootDir: process.cwd() });
+    console.log(`[service] installed user service: ${servicePath}`);
+    console.log("[service] started with systemctl --user restart codex-feishu-bridge.service");
+    console.log(
+      `[service] health check: curl http://127.0.0.1:${process.env.PORT || 3000}/healthz`
+    );
+    return;
+  }
+  if (command === "service-remove") {
+    const servicePath = removeSystemdUserService();
+    console.log(`[service] removed user service: ${servicePath}`);
+    return;
+  }
+  if (command === "service-path") {
+    console.log(getSystemdUserServicePath());
     return;
   }
 

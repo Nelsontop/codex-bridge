@@ -49,6 +49,7 @@ test("setup checklist and missing config guide include actionable next steps", (
 
   assert.equal(checklist.includes("/tmp/project/.env"), true);
   assert.equal(checklist.includes("npm start"), true);
+  assert.equal(checklist.includes("npm run service:install"), true);
   assert.equal(guide.includes("FEISHU_APP_ID"), true);
   assert.equal(guide.includes("npm run setup"), true);
 });

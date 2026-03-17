@@ -62,6 +62,20 @@ npm run setup
 npm start
 ```
 
+如果你要让服务在终端断开后仍然常驻，优先用 `systemd --user`：
+
+```bash
+npm run service:install
+```
+
+安装后可用这些命令管理：
+
+```bash
+npm run service:status
+npm run service:restart
+npm run service:logs
+```
+
 ### 5. 验证健康检查
 
 ```bash
@@ -220,6 +234,47 @@ npm run dev
 ```bash
 npm start
 ```
+
+### 常驻后台启动（systemd --user）
+
+适用前提：
+
+- Linux，且宿主机使用 `systemd`
+- 当前用户可执行 `systemctl --user`
+
+安装并立即启动：
+
+```bash
+npm run service:install
+```
+
+这会把 unit 写到：
+
+```text
+~/.config/systemd/user/codex-feishu-bridge.service
+```
+
+常用管理命令：
+
+```bash
+npm run service:status
+npm run service:start
+npm run service:stop
+npm run service:restart
+npm run service:logs
+npm run service:remove
+```
+
+如果你希望在“没有任何登录会话”时也继续常驻，例如 SSH 退出后仍保活，再额外执行：
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+如果这个前提不成立会怎样？
+
+- `systemctl --user` 不可用时，`npm run service:install` 会直接失败
+- 没启用 linger 时，服务通常能跨终端存活，但未必能跨“最后一个用户会话退出”
 
 ### 健康检查
 

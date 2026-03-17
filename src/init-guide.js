@@ -132,7 +132,7 @@ export function buildSetupChecklist({ envFilePath }) {
     "4. 在飞书后台把订阅方式切到“使用长连接接收事件/回调”。",
     "5. 把应用安装到企业，并确保机器人可以被私聊或被群聊 @。",
     "6. 先执行 `gh auth login`，确保本机已登录 GitHub。",
-    "7. 运行 `npm start` 启动桥接服务。",
+    "7. 开发调试时运行 `npm start`，长期常驻建议运行 `npm run service:install`。",
     "8. 用 `curl http://127.0.0.1:3000/healthz` 验证健康检查。"
   ].join("\n");
 }

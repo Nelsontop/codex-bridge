@@ -8,6 +8,15 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "setup": "node src/index.js setup",
+    "service:install": "node src/index.js service-install",
+    "service:remove": "node src/index.js service-remove",
+    "service:print": "node src/index.js service-print",
+    "service:path": "node src/index.js service-path",
+    "service:start": "systemctl --user start codex-feishu-bridge.service",
+    "service:stop": "systemctl --user stop codex-feishu-bridge.service",
+    "service:restart": "systemctl --user restart codex-feishu-bridge.service",
+    "service:status": "systemctl --user status codex-feishu-bridge.service --no-pager",
+    "service:logs": "journalctl --user -u codex-feishu-bridge.service -f",
     "test": "node --test test/*.test.js"
   },
   "engines": {
