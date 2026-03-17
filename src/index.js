@@ -1,10 +1,9 @@
 import http from "node:http";
 import { loadConfig } from "./config.js";
 import { StateStore } from "./state-store.js";
-import { FeishuClient } from "./feishu-client.js";
 import { BridgeService } from "./bridge-service.js";
-import { FeishuWsClient } from "./feishu-ws-client.js";
 import { buildMissingConfigGuide, runSetupWizard } from "./init-guide.js";
+import { createFeishuChannelAdapter } from "./providers/channel/feishu/adapter.js";
 import {
   buildSystemdUserService,
   getSystemdUserServicePath,
@@ -61,20 +60,21 @@ async function main() {
   }
 
   const store = new StateStore(config.stateFile);
-  const feishuClient = new FeishuClient(config);
-  const bridge = new BridgeService(config, store, feishuClient);
-  const wsClient = new FeishuWsClient(config, bridge);
+  const channelAdapter = createFeishuChannelAdapter(config);
+  const bridge = new BridgeService(config, store, channelAdapter);
+  channelAdapter.attachBridge(bridge);
 
   if (config.enableHealthServer) {
     const server = http.createServer((req, res) => {
       if (req.method === "GET" && req.url === "/healthz") {
+        const channelMetrics = channelAdapter.getMetrics();
         sendJson(res, 200, {
           ok: true,
           transport: "feishu-ws",
           ...bridge.getHealth(),
-          feishu: feishuClient.getMetrics(),
-          reconnect: wsClient.getReconnectInfo(),
-          ws: wsClient.getMetrics()
+          feishu: channelMetrics.feishu || null,
+          reconnect: channelMetrics.reconnect || null,
+          ws: channelMetrics.ws || null
         });
         return;
       }
@@ -87,7 +87,7 @@ async function main() {
     });
   }
 
-  await wsClient.start();
+  await channelAdapter.start();
   await bridge.resumeRecoveredTasks();
   console.log(
     `[ws] feishu persistent connection started, working in ${config.codexWorkspaceDir}`

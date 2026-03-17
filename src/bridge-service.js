@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { runCodexTask as defaultRunCodexTask } from "./codex-runner.js";
+import { createCliProviderRegistry } from "./core/cli-provider.js";
+import { TaskOrchestrator } from "./core/task-orchestrator.js";
+import { createCodexProvider } from "./providers/cli/codex-provider.js";
 import { prepareWorkspaceBinding as defaultPrepareWorkspaceBinding } from "./workspace-binding.js";
 import { BridgeCommandRouter } from "./bridge-command-router.js";
 import { markTaskCompleted, markTaskFailed, markTaskRunning } from "./task-lifecycle.js";
@@ -542,6 +545,24 @@ export class BridgeService {
     this.store = store;
     this.feishuClient = feishuClient;
     this.runCodexTask = dependencies.runCodexTask || defaultRunCodexTask;
+    const providerRegistry = dependencies.cliProviderRegistry || createCliProviderRegistry();
+    if (providerRegistry.list().length === 0) {
+      if (dependencies.cliProvider) {
+        providerRegistry.register(dependencies.cliProvider);
+      } else {
+        providerRegistry.register(
+          createCodexProvider(this.config, {
+            runCodexTask: this.runCodexTask
+          })
+        );
+      }
+    }
+    this.taskOrchestrator =
+      dependencies.taskOrchestrator ||
+      new TaskOrchestrator({
+        providerRegistry,
+        resolveProviderName: () => this.resolveCliProviderName()
+      });
     this.prepareWorkspaceBinding =
       dependencies.prepareWorkspaceBinding || defaultPrepareWorkspaceBinding;
     this.autoCommitWorkspace =
@@ -579,6 +600,10 @@ export class BridgeService {
     this.interruptedTasks = this.runtime.interruptedTasks;
     this.metrics.recoveredQueuedCount = this.queue.length;
     this.metrics.recoveredInterruptedCount = this.interruptedTasks.length;
+  }
+
+  resolveCliProviderName(_chatKey = "") {
+    return this.config.cliProvider || "codex";
   }
 
   resolveWorkspaceDir(chatKey, chatId) {
@@ -851,10 +876,13 @@ export class BridgeService {
       `4. 控制长度在约 ${this.getMemoryTokenBudget(task.modelContextWindow)} tokens 以内。`,
       "5. 只输出记忆正文，不要寒暄，不要解释。"
     ].join("\n");
-    const summaryRunner = this.runCodexTask(this.config, {
+    const summaryRunner = this.taskOrchestrator.runTask({
+      chatKey: task.chatKey,
+      taskOptions: {
       prompt: summaryPrompt,
       sessionId,
       workspaceDir: task.workspaceDir
+      }
     });
     const summaryResult = await summaryRunner.result;
     const memoryText = this.trimMemoryToBudget(
@@ -1779,13 +1807,16 @@ export class BridgeService {
     const sessionId =
       task.sessionId ||
       (conversation?.workspaceDir === task.workspaceDir ? conversation?.sessionId || null : null);
-    const runner = this.runCodexTask(this.config, {
+    const runner = this.taskOrchestrator.runTask({
+      chatKey: task.chatKey,
+      taskOptions: {
       onEvent: (event) => {
         this.handleRunnerEvent(task, event);
       },
       prompt: this.buildPromptWithMemory(task.prompt, conversation, task.workspaceDir),
       sessionId,
       workspaceDir: task.workspaceDir
+      }
     });
 
     task.runner = runner;

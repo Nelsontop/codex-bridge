@@ -1831,3 +1831,34 @@ test("task title summary extracts intent instead of truncating raw text", async 
   });
   await waitFor(() => bridge.running.size === 0);
 });
+
+test("BridgeService executes tasks through taskOrchestrator when provided", async () => {
+  const client = createClient();
+  const calls = [];
+  const bridge = new BridgeService(
+    createConfig(),
+    createStore(),
+    client,
+    {
+      autoCommitWorkspace: async () => ({ status: "disabled" }),
+      taskOrchestrator: {
+        runTask({ chatKey, taskOptions }) {
+          calls.push({ chatKey, taskOptions });
+          return {
+            cancel() {},
+            result: Promise.resolve({
+              finalMessage: "done",
+              sessionId: "thread_from_orchestrator"
+            })
+          };
+        }
+      }
+    }
+  );
+
+  await bridge.dispatchEvent(loadFixture("message.receive_v1.json"));
+  await waitFor(() => bridge.running.size === 0 && calls.length === 1);
+
+  assert.equal(calls[0].chatKey, "p2p:oc_test_chat");
+  assert.equal(typeof calls[0].taskOptions.prompt, "string");
+});

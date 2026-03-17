@@ -144,6 +144,7 @@ GITHUB_REPO_OWNER=
 CHAT_WORKSPACE_MAPPINGS=
 
 CODEX_COMMAND=codex
+CLI_PROVIDER=codex
 CODEX_MODEL=
 CODEX_PROFILE=
 
@@ -164,6 +165,7 @@ AUTO_COMMIT_MESSAGE_PREFIX="bridge: save"
 - `GITHUB_REPO_OWNER`：`/bind` 创建 GitHub 仓库时使用的 owner；不填则使用当前 `gh` 登录用户
 - `CHAT_WORKSPACE_MAPPINGS`：静态聊天目录映射，格式 `chatKey=/abs/path;chat_id=/abs/path`
 - `CODEX_COMMAND`：覆盖默认 `codex` 启动命令，支持带参数
+- `CLI_PROVIDER`：选择当前全局 CLI provider（V1 仅支持 `codex`）
 - `CODEX_MODEL` / `CODEX_PROFILE`：需要固定模型或 profile 时再填
 
 ### 可选调优项
@@ -201,6 +203,12 @@ AUTO_COMMIT_MESSAGE_PREFIX="bridge: save"
 ## 项目结构
 
 运行时代码在 [`src/`](/vol3/1000/workspace/codex-bridge/src)：
+
+V1 重构后采用 `core + providers` 分层：
+
+- `src/core/`：核心契约与任务编排（与具体 CLI/渠道解耦）
+- `src/providers/cli/`：CLI 适配层（当前含 `codex`）
+- `src/providers/channel/`：渠道适配层（当前含 `feishu`）
 
 - [`src/index.js`](/vol3/1000/workspace/codex-bridge/src/index.js)：进程入口，加载配置、启动健康检查与飞书长连接
 - [`src/bridge-service.js`](/vol3/1000/workspace/codex-bridge/src/bridge-service.js)：事件分发、任务队列、状态同步、交互处理

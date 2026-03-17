@@ -16,6 +16,7 @@ const DEFAULT_PRELUDE = [
 const DEFAULTS = {
   autoCommitAfterTaskEnabled: false,
   autoCommitMessagePrefix: "bridge: save",
+  cliProvider: "codex",
   codexApprovalPolicy: "never",
   codexCommand: "codex",
   codexSandbox: "workspace-write",
@@ -238,6 +239,13 @@ export function loadConfig(rootDir = process.cwd()) {
     1,
     asNumber(process.env.MAX_CONCURRENT_TASKS, DEFAULTS.maxConcurrentTasks)
   );
+  const cliProvider = (process.env.CLI_PROVIDER || DEFAULTS.cliProvider).trim().toLowerCase();
+  const supportedCliProviders = ["codex"];
+  if (!supportedCliProviders.includes(cliProvider)) {
+    throw new Error(
+      `Unsupported CLI_PROVIDER: ${cliProvider}. Supported values: ${supportedCliProviders.join(", ")}`
+    );
+  }
 
   return {
     rootDir,
@@ -315,6 +323,7 @@ export function loadConfig(rootDir = process.cwd()) {
       DEFAULTS.feishuInteractiveCardsEnabled
     ),
     githubRepoOwner: process.env.GITHUB_REPO_OWNER || "",
+    cliProvider,
     codexCommand: resolveCodexCommand(),
     codexWorkspaceDir: workspaceDir,
     workspaceAllowedRoots:
