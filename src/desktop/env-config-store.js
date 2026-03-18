@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const CORE_ENV_FIELDS = [
+export const SETTINGS_ENV_FIELDS = [
   "FEISHU_APP_ID",
   "FEISHU_APP_SECRET",
   "FEISHU_BOT_OPEN_ID",
@@ -11,16 +11,51 @@ export const CORE_ENV_FIELDS = [
   "STATE_DIR",
   "CODEX_WORKSPACE_DIR",
   "WORKSPACE_ALLOWED_ROOTS",
+  "CHAT_WORKSPACE_MAPPINGS",
+  "GITHUB_REPO_OWNER",
   "CLI_PROVIDER",
   "CHANNEL_PROVIDER",
+  "CODEX_ADDITIONAL_ARGS",
   "CODEX_COMMAND",
   "CODEX_MODEL",
   "CODEX_PROFILE",
+  "CODEX_PRELUDE",
   "CODEX_SANDBOX",
-  "CODEX_APPROVAL_POLICY"
+  "CODEX_APPROVAL_POLICY",
+  "CODEX_SKIP_GIT_REPO_CHECK",
+  "ENABLE_HEALTH_SERVER",
+  "DUPLICATE_TASK_WINDOW_MS",
+  "MAX_CONCURRENT_TASKS",
+  "MAX_QUEUED_TASKS_PER_CHAT",
+  "MAX_QUEUED_TASKS_PER_USER",
+  "MAX_REPLY_CHARS",
+  "TASK_ACK_ENABLED",
+  "CONTEXT_COMPACT_ENABLED",
+  "CONTEXT_COMPACT_THRESHOLD",
+  "CONTEXT_MEMORY_LOAD_FRACTION",
+  "CONTEXT_WINDOW_FALLBACK_TOKENS",
+  "FEISHU_BASE_URL",
+  "FEISHU_REQUEST_TIMEOUT_MS",
+  "FEISHU_REQUEST_RETRIES",
+  "FEISHU_REQUEST_RETRY_DELAY_MS",
+  "FEISHU_REQUIRE_MENTION_IN_GROUP",
+  "FEISHU_REPLY_TO_MESSAGE_ENABLED",
+  "FEISHU_INTERACTIVE_CARDS_ENABLED",
+  "FEISHU_STREAM_OUTPUT_ENABLED",
+  "FEISHU_STREAM_COMMAND_STATUS_ENABLED",
+  "FEISHU_STREAM_MODE",
+  "FEISHU_STREAM_UPDATE_MIN_INTERVAL_MS",
+  "AUTO_COMMIT_AFTER_TASK_ENABLED",
+  "AUTO_COMMIT_MESSAGE_PREFIX",
+  "CLAUDE_CODE_COMMAND",
+  "CLAUDE_CODE_ADDITIONAL_ARGS",
+  "OPENCODE_COMMAND",
+  "OPENCODE_ADDITIONAL_ARGS",
+  "KIMI_CLI_COMMAND",
+  "KIMI_CLI_ADDITIONAL_ARGS"
 ];
 
-export const CORE_ENV_FIELD_SET = new Set(CORE_ENV_FIELDS);
+export const SETTINGS_ENV_FIELD_SET = new Set(SETTINGS_ENV_FIELDS);
 
 function parseEnvLine(line) {
   const index = line.indexOf("=");
@@ -83,8 +118,8 @@ export function parseAdvancedEnvText(text) {
       errors.push(`Line ${index + 1}: invalid format, expected KEY=VALUE`);
       continue;
     }
-    if (CORE_ENV_FIELD_SET.has(entry.key)) {
-      errors.push(`Line ${index + 1}: ${entry.key} must be edited in Core Settings`);
+    if (SETTINGS_ENV_FIELD_SET.has(entry.key)) {
+      errors.push(`Line ${index + 1}: ${entry.key} must be edited in Visual Settings`);
       continue;
     }
     values[entry.key] = entry.value;
@@ -95,10 +130,10 @@ export function parseAdvancedEnvText(text) {
   };
 }
 
-export function buildUpdatedEnvText(existingText, { coreValues = {}, advancedValues = {} }) {
+export function buildUpdatedEnvText(existingText, { settingsValues = {}, advancedValues = {} }) {
   const existingMap = parseEnvText(existingText);
   const existingAdvancedKeys = new Set(
-    Object.keys(existingMap).filter((key) => !CORE_ENV_FIELD_SET.has(key))
+    Object.keys(existingMap).filter((key) => !SETTINGS_ENV_FIELD_SET.has(key))
   );
   const lines = String(existingText || "").split(/\r?\n/);
   const output = [];
@@ -118,8 +153,8 @@ export function buildUpdatedEnvText(existingText, { coreValues = {}, advancedVal
     }
 
     const { key } = entry;
-    if (CORE_ENV_FIELD_SET.has(key)) {
-      const nextValue = key in coreValues ? coreValues[key] : "";
+    if (SETTINGS_ENV_FIELD_SET.has(key)) {
+      const nextValue = key in settingsValues ? settingsValues[key] : "";
       output.push(`${key}=${escapeEnvValue(nextValue)}`);
       processedKeys.add(key);
       continue;
@@ -138,16 +173,16 @@ export function buildUpdatedEnvText(existingText, { coreValues = {}, advancedVal
     output.push(rawLine);
   }
 
-  const missingCoreKeys = CORE_ENV_FIELDS.filter((key) => !processedKeys.has(key));
+  const missingSettingsKeys = SETTINGS_ENV_FIELDS.filter((key) => !processedKeys.has(key));
   const missingAdvancedKeys = Object.keys(advancedValues).filter((key) => !processedKeys.has(key));
   if (output.length > 0 && output[output.length - 1].trim() !== "") {
     output.push("");
   }
 
-  if (missingCoreKeys.length > 0) {
-    output.push("# Core Settings");
-    for (const key of missingCoreKeys) {
-      output.push(`${key}=${escapeEnvValue(coreValues[key] || "")}`);
+  if (missingSettingsKeys.length > 0) {
+    output.push("# Visual Settings");
+    for (const key of missingSettingsKeys) {
+      output.push(`${key}=${escapeEnvValue(settingsValues[key] || "")}`);
     }
     output.push("");
   }
@@ -169,25 +204,30 @@ export function loadEnvConfig(rootDir) {
   const rawText = exists ? fs.readFileSync(envPath, "utf8") : "";
   const parsed = parseEnvText(rawText);
 
-  const coreValues = {};
-  for (const key of CORE_ENV_FIELDS) {
-    coreValues[key] = parsed[key] || "";
+  const settingsValues = {};
+  for (const key of SETTINGS_ENV_FIELDS) {
+    settingsValues[key] = parsed[key] || "";
   }
 
   const advancedLines = Object.keys(parsed)
-    .filter((key) => !CORE_ENV_FIELD_SET.has(key))
+    .filter((key) => !SETTINGS_ENV_FIELD_SET.has(key))
     .sort()
     .map((key) => `${key}=${parsed[key]}`);
 
   return {
     envPath,
-    coreValues,
+    settingsValues,
+    coreValues: settingsValues,
     advancedText: advancedLines.join("\n"),
     exists
   };
 }
 
-export function saveEnvConfig(rootDir, { coreValues = {}, advancedText = "" }) {
+export function saveEnvConfig(rootDir, payload = {}) {
+  const {
+    settingsValues = payload.coreValues || {},
+    advancedText = ""
+  } = payload;
   const envPath = path.join(rootDir, ".env");
   const existingText = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
   const parsedAdvanced = parseAdvancedEnvText(advancedText);
@@ -198,7 +238,7 @@ export function saveEnvConfig(rootDir, { coreValues = {}, advancedText = "" }) {
   }
 
   const nextText = buildUpdatedEnvText(existingText, {
-    coreValues,
+    settingsValues,
     advancedValues: parsedAdvanced.values
   });
   fs.writeFileSync(envPath, nextText, "utf8");

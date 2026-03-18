@@ -15,16 +15,17 @@
 
       <main class="layout">
         <section class="card">
-          <h2>Core Settings</h2>
-          <form id="core-form" class="form-grid"></form>
+          <h2>Visual Settings</h2>
+          <form id="settings-form"></form>
           <div class="actions">
             <button id="save-btn" type="button">保存配置</button>
+            <button id="toggle-advanced" type="button">显示高级配置</button>
           </div>
         </section>
 
         <section class="card">
-          <h2>Advanced Settings</h2>
-          <p class="hint">每行一个配置：KEY=VALUE（不包含 Core 字段）</p>
+          <h2>Custom Variables</h2>
+          <p class="hint">仅填写非内置键，每行一个：KEY=VALUE</p>
           <textarea id="advanced-text" rows="12"></textarea>
         </section>
 

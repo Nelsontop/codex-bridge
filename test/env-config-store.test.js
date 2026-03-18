@@ -28,7 +28,7 @@ FOO=1
 BAR=2
 `.trimStart();
   const text = buildUpdatedEnvText(existing, {
-    coreValues: {
+    settingsValues: {
       FEISHU_APP_ID: "new-app",
       FEISHU_APP_SECRET: "new-secret"
     },
@@ -59,18 +59,18 @@ test("saveEnvConfig writes and loads env config", () => {
   );
 
   const saved = saveEnvConfig(rootDir, {
-    coreValues: {
+    settingsValues: {
       FEISHU_APP_ID: "app2",
       FEISHU_APP_SECRET: "secret2",
       PORT: "3001"
     },
     advancedText: "HELLO=WORLD"
   });
-  assert.equal(saved.coreValues.FEISHU_APP_ID, "app2");
-  assert.equal(saved.coreValues.PORT, "3001");
+  assert.equal(saved.settingsValues.FEISHU_APP_ID, "app2");
+  assert.equal(saved.settingsValues.PORT, "3001");
   assert.match(saved.advancedText, /HELLO=WORLD/);
   assert.doesNotMatch(saved.advancedText, /FOO=bar/);
 
   const loaded = loadEnvConfig(rootDir);
-  assert.equal(loaded.coreValues.FEISHU_APP_SECRET, "secret2");
+  assert.equal(loaded.settingsValues.FEISHU_APP_SECRET, "secret2");
 });

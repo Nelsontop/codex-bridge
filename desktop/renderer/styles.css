@@ -64,6 +64,16 @@ body {
   gap: 12px;
 }
 
+.sub-section + .sub-section {
+  margin-top: 18px;
+}
+
+.section-title {
+  margin: 0 0 10px;
+  font-size: 15px;
+  color: var(--muted);
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -80,6 +90,11 @@ select,
 textarea,
 button {
   font: inherit;
+}
+
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
 }
 
 input,
