@@ -4,6 +4,7 @@ dist
 .agent-bridge
 .codex-feishu-bridge
 .codex
+.gstack
 .learnings
 .tmp-test
 TODO.md
