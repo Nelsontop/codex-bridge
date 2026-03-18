@@ -160,6 +160,18 @@ npm run dev
 npm test
 ```
 
+- 桌面版（Windows EXE 开发模式）：
+
+```bash
+npm run desktop:dev
+```
+
+- 打包 Windows 安装包 / 便携版：
+
+```bash
+npm run desktop:pack
+```
+
 - 安装 systemd 用户服务：
 
 ```bash
@@ -171,6 +183,8 @@ npm run service:install
 ```bash
 npm run service:logs
 ```
+
+> `service:*` 仅适用于 Linux systemd。Windows 桌面版请通过 GUI 的 Service Control 启停。
 
 ## 9. 最常见问题（速查）
 

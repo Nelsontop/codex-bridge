@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "description": "Channel-agnostic agent bridge for routing chat tasks to local CLI providers.",
+  "main": "desktop/main.js",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
+    "desktop:dev": "electron .",
+    "desktop:pack": "electron-builder --win nsis portable",
     "dev": "node --watch src/index.js",
     "setup": "node src/index.js setup",
     "service:install": "node src/index.js service-install",
@@ -21,5 +24,27 @@
   },
   "engines": {
     "node": ">=18.18"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.nelsontop.agentbridge",
+    "productName": "Agent Bridge",
+    "asar": false,
+    "files": [
+      "desktop/**/*",
+      "src/**/*",
+      ".vendor/**/*",
+      "package.json",
+      "README.md"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
   }
 }

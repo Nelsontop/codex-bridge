@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Bridge Desktop</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="hero">
+        <h1>Agent Bridge</h1>
+        <p>Windows 桌面版配置中心</p>
+      </header>
+
+      <main class="layout">
+        <section class="card">
+          <h2>Core Settings</h2>
+          <form id="core-form" class="form-grid"></form>
+          <div class="actions">
+            <button id="save-btn" type="button">保存配置</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Advanced Settings</h2>
+          <p class="hint">每行一个配置：KEY=VALUE（不包含 Core 字段）</p>
+          <textarea id="advanced-text" rows="12"></textarea>
+        </section>
+
+        <section class="card">
+          <h2>Service Control</h2>
+          <div class="actions">
+            <button id="start-btn" type="button">启动服务</button>
+            <button id="stop-btn" type="button">停止服务</button>
+            <button id="refresh-btn" type="button">刷新状态</button>
+          </div>
+          <pre id="service-status"></pre>
+        </section>
+
+        <section class="card">
+          <h2>Runtime Logs</h2>
+          <pre id="service-logs"></pre>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>
