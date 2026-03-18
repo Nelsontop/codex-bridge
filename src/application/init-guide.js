@@ -167,7 +167,7 @@ export async function runSetupWizard({
   const rl = readline.createInterface({ input, output });
 
   try {
-    output.write("Codex Feishu Bridge 初始化向导\n\n");
+    output.write("Agent Bridge 初始化向导\n\n");
 
     const values = {
       FEISHU_APP_ID: await promptValue(rl, output, {

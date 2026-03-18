@@ -1,4 +1,4 @@
 interface:
-  display_name: "Codex Feishu Bridge"
-  short_description: "Run and debug the Feishu bridge"
-  default_prompt: "Use $codex-feishu-bridge to set up, operate, or troubleshoot this Feishu-to-Codex bridge."
+  display_name: "Agent Bridge"
+  short_description: "Run and debug the multi-channel agent bridge"
+  default_prompt: "Use $agent-bridge to set up, operate, or troubleshoot this channel-to-agent bridge."

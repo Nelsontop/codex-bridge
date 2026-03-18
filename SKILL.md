@@ -1,9 +1,9 @@
 ---
-name: codex-feishu-bridge
-description: Operate, configure, troubleshoot, and extend the Codex Feishu Bridge project that routes Feishu messages to local Codex CLI sessions. Use when you need to set up the bridge, start or restart the service, health-check the Feishu connection, bind group chats to local workspaces, debug task/session/queue behavior, or modify the bridge implementation itself.
+name: agent-bridge
+description: Operate, configure, troubleshoot, and extend the Agent Bridge project that routes channel messages to local CLI agent sessions. Use when you need to set up the bridge, start or restart the service, health-check the channel connection, bind group chats to local workspaces, debug task/session/queue behavior, or modify the bridge implementation itself.
 ---
 
-# Codex Feishu Bridge
+# Agent Bridge
 
 Use this skill when working on this repository or when another Codex instance needs to run this bridge for remote control through Feishu.
 

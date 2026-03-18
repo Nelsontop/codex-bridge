@@ -246,7 +246,7 @@ export function loadConfig(rootDir = process.cwd()) {
   );
   const stateDir = path.resolve(
     rootDir,
-    process.env.STATE_DIR || ".codex-feishu-bridge"
+    process.env.STATE_DIR || ".agent-bridge"
   );
   const gitAutoCommitEnabled = asBoolean(
     process.env.AUTO_COMMIT_AFTER_TASK_ENABLED,

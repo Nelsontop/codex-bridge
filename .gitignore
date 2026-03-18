@@ -1,6 +1,7 @@
 node_modules
 dist
 .env
+.agent-bridge
 .codex-feishu-bridge
 .codex
 .learnings

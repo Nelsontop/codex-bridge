@@ -1,28 +1,4 @@
-function summarizeTaskPrompt(prompt, maxChars = 18) {
-  const normalized = String(prompt || "")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[[^\]]+\]\([^)]+\)/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) {
-    return "task";
-  }
-
-  let summary = normalized
-    .replace(/^(请|帮我|麻烦你|需要你)\s*/, "")
-    .replace(/^(看下|看看)\s*/, "")
-    .replace(/(，|。|；|！|？).*$/, "")
-    .replace(/\s+/g, "");
-
-  if (!summary) {
-    summary = "task";
-  }
-  if (summary.length > maxChars) {
-    summary = summary.slice(0, maxChars).replace(/[，。；！？,.!?\s_-]+$/g, "");
-  }
-  return summary || "task";
-}
+import { summarizeTaskPrompt } from "./task-summary.js";
 
 function sanitizeTaskSnapshot(task) {
   return {
@@ -190,8 +166,16 @@ export class TaskRuntime {
   }
 
   dequeueNextRunnable(maxConcurrentTasks) {
+    const runningCountByChat = new Map();
+    for (const task of this.running.values()) {
+      runningCountByChat.set(
+        task.chatKey,
+        (runningCountByChat.get(task.chatKey) || 0) + 1
+      );
+    }
+
     const nextTaskIndex = this.queue.findIndex(
-      (task) => this.countRunningTasksForChat(task.chatKey) < maxConcurrentTasks
+      (task) => (runningCountByChat.get(task.chatKey) || 0) < maxConcurrentTasks
     );
     if (nextTaskIndex < 0) {
       return null;

@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This repository is a small Node.js bridge service that connects Feishu messages to local `codex exec` sessions. Runtime code lives in [`src/`](/vol3/1000/workspace/codex-bridge/src): `index.js` boots the process, `bridge-service.js` handles routing and task queues, `codex-runner.js` spawns Codex, and the Feishu transport is split across `feishu-client.js` and `feishu-ws-client.js`. Persistent local state is written to `.codex-feishu-bridge/state.json`. Vendored third-party SDK code is kept under `.vendor/`; treat it as upstream code and avoid editing it unless you are intentionally updating the vendor snapshot.
+This repository is a small Node.js bridge service that connects channel messages to local CLI agent sessions. Runtime code lives in [`src/`](/vol3/1000/workspace/codex-bridge/src): `index.js` boots the process, `bridge-service.js` handles routing and task queues, `codex-runner.js` spawns Codex, and the Feishu transport is split across `feishu-client.js` and `feishu-ws-client.js`. Persistent local state is written to `.agent-bridge/state.json`. Vendored third-party SDK code is kept under `.vendor/`; treat it as upstream code and avoid editing it unless you are intentionally updating the vendor snapshot.
 
 ## Build, Test, and Development Commands
 There is no build step. Use Node 18.18+.

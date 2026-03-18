@@ -1,8 +1,8 @@
 {
-  "name": "codex-feishu-bridge",
+  "name": "agent-bridge",
   "version": "0.1.0",
   "private": true,
-  "description": "Remote-control Codex from Feishu with a local bridge service.",
+  "description": "Channel-agnostic agent bridge for routing chat tasks to local CLI providers.",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
@@ -12,11 +12,11 @@
     "service:remove": "node src/index.js service-remove",
     "service:print": "node src/index.js service-print",
     "service:path": "node src/index.js service-path",
-    "service:start": "systemctl --user start codex-feishu-bridge.service",
-    "service:stop": "systemctl --user stop codex-feishu-bridge.service",
-    "service:restart": "systemctl --user restart codex-feishu-bridge.service",
-    "service:status": "systemctl --user status codex-feishu-bridge.service --no-pager",
-    "service:logs": "journalctl --user -u codex-feishu-bridge.service -f",
+    "service:start": "systemctl --user start agent-bridge.service",
+    "service:stop": "systemctl --user stop agent-bridge.service",
+    "service:restart": "systemctl --user restart agent-bridge.service",
+    "service:status": "systemctl --user status agent-bridge.service --no-pager",
+    "service:logs": "journalctl --user -u agent-bridge.service -f",
     "test": "node --test test/*.test.js"
   },
   "engines": {

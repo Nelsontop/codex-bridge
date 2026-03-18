@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-export const SYSTEMD_USER_SERVICE_NAME = "codex-feishu-bridge.service";
+export const SYSTEMD_USER_SERVICE_NAME = "agent-bridge.service";
 
 function quoteSystemdValue(value) {
   return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
@@ -41,7 +41,7 @@ export function buildSystemdUserService({ rootDir, nodePath = process.execPath, 
 
   return [
     "[Unit]",
-    "Description=Codex Feishu Bridge",
+    "Description=Agent Bridge",
     "After=network-online.target",
     "Wants=network-online.target",
     "",

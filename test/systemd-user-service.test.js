@@ -9,7 +9,7 @@ test("buildSystemdUserService renders a restartable user service", () => {
     pathEnv: "/usr/local/bin:/usr/bin"
   });
 
-  assert.equal(service.includes("Description=Codex Feishu Bridge"), true);
+  assert.equal(service.includes("Description=Agent Bridge"), true);
   assert.equal(service.includes("WorkingDirectory=/workspace/codex-bridge"), true);
   assert.equal(
     service.includes('ExecStart="/usr/bin/node" "/workspace/codex-bridge/src/index.js"'),
