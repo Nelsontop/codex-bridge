@@ -8,6 +8,9 @@ import { registerBuiltinCliProviders } from "../providers/cli/index.js";
 import { prepareWorkspaceBinding as defaultPrepareWorkspaceBinding } from "../infrastructure/workspace/workspace-binding.js";
 import { BridgeCommandRouter } from "./bridge-command-router.js";
 import { markTaskCompleted, markTaskFailed, markTaskRunning } from "./task-lifecycle.js";
+import { MessageDispatchService } from "./message-dispatch.js";
+import { runTaskExecution } from "./task-execution.js";
+import { buildTaskName, summarizeTaskPrompt } from "./task-summary.js";
 import { TaskRuntime } from "./task-runtime.js";
 import {
   autoCommitWorkspace as defaultAutoCommitWorkspace,
@@ -18,9 +21,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const RECENT_EVENT_TTL_MS = 5 * 60 * 1000;
-const MAX_RECENT_EVENTS = 500;
-const MAX_RECENT_TASK_REQUESTS = 500;
 const MAX_INTERACTION_OPTIONS = 3;
 const INTERACTION_BLOCK_PATTERN = /```codex_bridge_interaction\s*([\s\S]*?)```/i;
 
@@ -90,121 +90,6 @@ function formatTaskId(number) {
 
 function normalizeTaskRequestText(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
-}
-
-const SUMMARY_ACTION_RULES = [
-  [/^(请)?(优化|改进|改良)/, "优化"],
-  [/^(请)?(修复|解决|排查|处理)/, "修复"],
-  [/^(请)?(新增|增加|添加|支持|实现)/, "新增"],
-  [/^(请)?(安装|集成)/, "安装"],
-  [/^(请)?(测试|验证)/, "测试"],
-  [/^(请)?(检查|查看|审查|review|review当前)/i, "检查"],
-  [/^(请)?(分析|解释|说明)/, "分析"],
-  [/^(请)?(重构)/, "重构"],
-  [/^(请)?(整理|汇总|总结)/, "整理"]
-];
-
-function normalizeSummaryText(text) {
-  return String(text || "")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[[^\]]+\]\([^)]+\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, (match) => {
-      const gitSkill = match.match(/skills\/(?:\.curated|\.experimental)\/([^/?#]+)/);
-      if (gitSkill) {
-        return `${gitSkill[1]} 技能`;
-      }
-      const githubTree = match.match(/github\.com\/[^/]+\/[^/]+\/tree\/[^/]+\/(.+)$/);
-      if (githubTree) {
-        const last = githubTree[1].split("/").filter(Boolean).pop();
-        return last || "链接";
-      }
-      return "链接";
-    })
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function detectSummaryAction(text) {
-  const normalized = normalizeSummaryText(text);
-  for (const [pattern, label] of SUMMARY_ACTION_RULES) {
-    if (pattern.test(normalized)) {
-      return label;
-    }
-  }
-  return "";
-}
-
-function extractSummaryTopic(text, action) {
-  const normalized = normalizeSummaryText(text)
-    .replace(/^(请|帮我|麻烦你|需要你)\s*/, "")
-    .replace(/^(看下|看看)\s*/, "");
-  if (!normalized) {
-    return "";
-  }
-
-  if (action) {
-    const actionPattern = new RegExp(`^${action}`);
-    const withoutAction = normalized.replace(actionPattern, "").trim();
-    const directTopic = withoutAction
-      .split(/[，。；！？,.!?\n]/, 1)[0]
-      .replace(/^(一下|下|一下子|一下这个|一下这条|一下当前)\s*/, "")
-      .replace(/^(任务|技能|功能|按钮)\s*/, (match) => match)
-      .trim();
-    if (directTopic) {
-      return directTopic;
-    }
-  }
-
-  const codeMatch = normalized.match(/([A-Za-z0-9._/-]+\.(js|ts|md|json|yaml|yml))/i);
-  if (codeMatch) {
-    return codeMatch[1];
-  }
-
-  return normalized.split(/[，。；！？,.!?\n]/, 1)[0].trim();
-}
-
-function summarizeTaskPrompt(prompt, maxChars = 18) {
-  const normalized = normalizeSummaryText(
-    String(prompt || "")
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .slice(0, 3)
-      .join(" ")
-  );
-  if (!normalized) {
-    return "task";
-  }
-
-  const action = detectSummaryAction(normalized);
-  let topic = extractSummaryTopic(normalized, action);
-  topic = topic
-    .replace(/^(当前|这个|这次)\s*/, "")
-    .replace(/(，|。|；|！|？).*$/, "")
-    .replace(/\s+/g, "")
-    .replace(/^请/, "")
-    .trim();
-
-  let summary = action
-    ? `${action}${topic && !topic.startsWith(action) ? topic : topic.replace(new RegExp(`^${action}`), "")}`
-    : topic || normalized;
-  summary = summary
-    .replace(/^(检查当前)/, "检查")
-    .replace(/^(查看当前)/, "查看")
-    .replace(/^(review)/i, "审查")
-    .trim();
-
-  if (!summary) {
-    summary = "task";
-  }
-  if (summary.length > maxChars) {
-    summary = summary.slice(0, maxChars).replace(/[，。；！？,.!?\s_-]+$/g, "");
-  }
-  return summary || "task";
-}
-
-function buildTaskName(task) {
-  return `${task.id}-${task.nameSummary || summarizeTaskPrompt(task.prompt)}`;
 }
 
 function matchesTaskReference(task, reference) {
@@ -593,6 +478,19 @@ export class BridgeService {
       helpText,
       matchesTaskReference
     });
+    this.messageDispatch = new MessageDispatchService(this, {
+      buildReplyTarget,
+      chatKeyFor,
+      extractBotAddedEvent,
+      extractCardAction,
+      extractEnvelopeEventId,
+      extractEventType,
+      extractMessageEvent,
+      helpText,
+      normalizeTaskRequestText,
+      parseContent,
+      stripMentions
+    });
     this.hasResumedRecoveredTasks = false;
     this.queue = this.runtime.queue;
     this.interruptedTasks = this.runtime.interruptedTasks;
@@ -980,376 +878,8 @@ export class BridgeService {
     this.pumpQueue();
   }
 
-  pruneRecentEvents(now = Date.now()) {
-    for (const [key, expiresAt] of this.recentEvents) {
-      if (expiresAt > now) {
-        continue;
-      }
-      this.recentEvents.delete(key);
-    }
-
-    while (this.recentEvents.size > MAX_RECENT_EVENTS) {
-      const oldestKey = this.recentEvents.keys().next().value;
-      if (!oldestKey) {
-        break;
-      }
-      this.recentEvents.delete(oldestKey);
-    }
-  }
-
-  pruneRecentTaskRequests(now = Date.now()) {
-    for (const [key, expiresAt] of this.recentTaskRequests) {
-      if (expiresAt > now) {
-        continue;
-      }
-      this.recentTaskRequests.delete(key);
-    }
-
-    while (this.recentTaskRequests.size > MAX_RECENT_TASK_REQUESTS) {
-      const oldestKey = this.recentTaskRequests.keys().next().value;
-      if (!oldestKey) {
-        break;
-      }
-      this.recentTaskRequests.delete(oldestKey);
-    }
-  }
-
-  rememberRecentEvent(eventKey, now = Date.now()) {
-    if (!eventKey) {
-      return false;
-    }
-
-    this.pruneRecentEvents(now);
-    const expiresAt = this.recentEvents.get(eventKey);
-    if (expiresAt && expiresAt > now) {
-      this.metrics.duplicateEventCount += 1;
-      return true;
-    }
-
-    this.recentEvents.delete(eventKey);
-    this.recentEvents.set(eventKey, now + RECENT_EVENT_TTL_MS);
-    this.pruneRecentEvents(now);
-    return false;
-  }
-
-  buildTaskRequestKey(chatKey, senderOpenId, prompt) {
-    const normalizedPrompt = normalizeTaskRequestText(prompt);
-    if (!chatKey || !senderOpenId || !normalizedPrompt) {
-      return "";
-    }
-    return `${chatKey}:${senderOpenId}:${normalizedPrompt}`;
-  }
-
-  hasEquivalentPendingTask(chatKey, senderOpenId, prompt) {
-    const normalizedPrompt = normalizeTaskRequestText(prompt);
-    if (!normalizedPrompt) {
-      return false;
-    }
-
-    return (
-      this.queue.some(
-        (task) =>
-          task.chatKey === chatKey &&
-          task.senderOpenId === senderOpenId &&
-          normalizeTaskRequestText(task.prompt) === normalizedPrompt
-      ) ||
-      [...this.running.values()].some(
-        (task) =>
-          task.chatKey === chatKey &&
-          task.senderOpenId === senderOpenId &&
-          normalizeTaskRequestText(task.prompt) === normalizedPrompt
-      )
-    );
-  }
-
-  rememberRecentTaskRequest(chatKey, senderOpenId, prompt, now = Date.now()) {
-    if (this.config.duplicateTaskWindowMs <= 0) {
-      return false;
-    }
-
-    const taskRequestKey = this.buildTaskRequestKey(chatKey, senderOpenId, prompt);
-    if (!taskRequestKey) {
-      return false;
-    }
-
-    this.pruneRecentTaskRequests(now);
-    const expiresAt = this.recentTaskRequests.get(taskRequestKey);
-    if (expiresAt && expiresAt > now) {
-      this.metrics.duplicateTaskCount += 1;
-      return true;
-    }
-
-    this.recentTaskRequests.delete(taskRequestKey);
-    this.recentTaskRequests.set(taskRequestKey, now + this.config.duplicateTaskWindowMs);
-    this.pruneRecentTaskRequests(now);
-    return false;
-  }
-
-  buildMessageEventKey(eventEnvelope, event) {
-    const eventId = extractEnvelopeEventId(eventEnvelope);
-    if (eventId) {
-      return `event:${extractEventType(eventEnvelope) || "message"}:${eventId}`;
-    }
-    const messageId = event?.message?.message_id || "";
-    return messageId ? `message:${messageId}` : "";
-  }
-
-  buildCardActionEventKey(eventEnvelope, action) {
-    const eventId = extractEnvelopeEventId(eventEnvelope);
-    if (eventId) {
-      return `event:${extractEventType(eventEnvelope) || "card"}:${eventId}`;
-    }
-    if (!action) {
-      return "";
-    }
-    return [
-      "card",
-      action.name || "",
-      action.taskId || "",
-      action.interactionId || "",
-      action.optionId || "",
-      action.replyToMessageId || "",
-      action.senderOpenId || ""
-    ].join(":");
-  }
-
-  async handleBotAddedEvent(eventEnvelope) {
-    if (this.rememberRecentEvent(extractEnvelopeEventId(eventEnvelope))) {
-      return;
-    }
-
-    const event = extractBotAddedEvent(eventEnvelope);
-    const chatId = event?.chat_id || "";
-    const chatKey = chatId ? `group:${chatId}` : "";
-    if (!chatId || !chatKey || this.hasBoundWorkspace(chatKey, chatId)) {
-      return;
-    }
-
-    await this.sendWorkspaceBindingPrompt(
-      {
-        chatId,
-        replyToMessageId: ""
-      },
-      chatKey,
-      chatId
-    );
-  }
-
   async dispatchEvent(eventEnvelope) {
-    const eventType = extractEventType(eventEnvelope);
-    if (eventType === "card.action.trigger") {
-      await this.handleCardAction(eventEnvelope);
-      return null;
-    }
-    if (eventType === "im.chat.member.bot.added_v1") {
-      await this.handleBotAddedEvent(eventEnvelope);
-      return null;
-    }
-
-    const event = extractMessageEvent(eventEnvelope);
-    if (!event || event.message?.message_type === undefined) {
-      return null;
-    }
-    if (event.sender?.sender_type && event.sender.sender_type !== "user") {
-      return null;
-    }
-
-    if (this.rememberRecentEvent(this.buildMessageEventKey(eventEnvelope, event))) {
-      return null;
-    }
-
-    const senderOpenId = event.sender?.sender_id?.open_id || "";
-    if (
-      this.config.feishuAllowedOpenIds.size > 0 &&
-      !this.config.feishuAllowedOpenIds.has(senderOpenId)
-    ) {
-      await this.safeSend(
-        buildReplyTarget(this.config, event),
-        "当前用户未被授权使用这个 Codex 桥接器。"
-      );
-      return null;
-    }
-
-    const parsedContent = parseContent(event);
-    if (!parsedContent.text) {
-      await this.safeSend(
-        buildReplyTarget(this.config, event),
-        parsedContent.parseError
-          ? "消息内容解析失败，暂不支持该消息格式。"
-          : "当前仅支持文本消息。"
-      );
-      return null;
-    }
-
-    const mentions = event.message.mentions || [];
-    if (
-      event.message.chat_type !== "p2p" &&
-      this.config.requireMentionInGroup &&
-      !this.isBotMentioned(mentions)
-    ) {
-      return null;
-    }
-
-    const text = stripMentions(parsedContent.text, mentions);
-    const chatKey = chatKeyFor(event);
-    const target = buildReplyTarget(this.config, event);
-    if (!text) {
-      await this.safeSend(target, helpText());
-      return null;
-    }
-
-    if (
-      event.message.chat_type !== "p2p" &&
-      !text.startsWith("/") &&
-      this.requiresWorkspaceBinding(chatKey, event.message.chat_id)
-    ) {
-      await this.sendWorkspaceBindingPrompt(target, chatKey, event.message.chat_id);
-      return null;
-    }
-
-    if (text.startsWith("/")) {
-      await this.handleCommand({
-        chatId: event.message.chat_id,
-        chatKey,
-        commandText: text,
-        senderOpenId,
-        target
-      });
-      return null;
-    }
-
-    const pendingForChat = this.countPendingTasksForChat(chatKey);
-    if (pendingForChat >= this.config.maxQueuedTasksPerChat) {
-      this.metrics.rejectedByChatLimit += 1;
-      await this.safeSend(
-        target,
-        `当前聊天待处理任务已达上限（${this.config.maxQueuedTasksPerChat}）。请等待已有任务完成，或用 /abort <任务号> 取消排队任务。`
-      );
-      return null;
-    }
-
-    const pendingForUser = this.countPendingTasksForUser(senderOpenId, chatKey);
-    if (pendingForUser >= this.config.maxQueuedTasksPerUser) {
-      this.metrics.rejectedByUserLimit += 1;
-      await this.safeSend(
-        target,
-        `当前聊天内该用户待处理任务已达上限（${this.config.maxQueuedTasksPerUser}）。请等待已有任务完成，或取消排队中的任务。`
-      );
-      return null;
-    }
-
-    if (this.hasEquivalentPendingTask(chatKey, senderOpenId, text)) {
-      this.metrics.duplicateTaskCount += 1;
-      await this.safeSend(target, "检测到相同指令已在执行或排队，已忽略这次重复请求。");
-      return null;
-    }
-
-    if (this.rememberRecentTaskRequest(chatKey, senderOpenId, text)) {
-      await this.safeSend(target, "检测到短时间内重复发送了相同指令，已忽略。");
-      return null;
-    }
-
-    const task = this.enqueueTask(event, text, senderOpenId, target);
-    if (this.config.taskAckEnabled) {
-      await this.sendTaskAck(task);
-    }
-    await this.refreshQueuedTaskCards();
-    this.pumpQueue();
-    return null;
-  }
-
-  async handleCardAction(eventEnvelope) {
-    const action = extractCardAction(eventEnvelope);
-    if (!action) {
-      return;
-    }
-
-    if (this.rememberRecentEvent(this.buildCardActionEventKey(eventEnvelope, action))) {
-      return;
-    }
-
-    if (
-      this.config.feishuAllowedOpenIds.size > 0 &&
-      !this.config.feishuAllowedOpenIds.has(action.senderOpenId)
-    ) {
-      await this.safeSend(
-        {
-          chatId: action.chatId,
-          replyToMessageId: action.replyToMessageId
-        },
-        "当前用户未被授权使用这个 Codex 桥接器。"
-      );
-      return;
-    }
-
-    if (action.name === "abort") {
-      await this.handleCommand({
-        chatId: action.chatId,
-        chatKey: action.chatKey,
-        commandText: `/abort ${action.taskId}`.trim(),
-        senderOpenId: action.senderOpenId,
-        silentSuccess: true,
-        target: {
-          chatId: action.chatId,
-          replyToMessageId: action.replyToMessageId
-        }
-      });
-      return;
-    }
-
-    if (action.name === "retry") {
-      await this.handleCommand({
-        chatId: action.chatId,
-        chatKey: action.chatKey,
-        commandText: `/retry ${action.taskId}`.trim(),
-        senderOpenId: action.senderOpenId,
-        silentSuccess: true,
-        target: {
-          chatId: action.chatId,
-          replyToMessageId: action.replyToMessageId
-        }
-      });
-      return;
-    }
-
-    if (action.name === "choose") {
-      const interaction = this.getPendingInteraction(action.chatKey);
-      if (!interaction || interaction.id !== action.interactionId) {
-        await this.safeSend(
-          {
-            chatId: action.chatId,
-            replyToMessageId: action.replyToMessageId
-          },
-          "这个选择卡片已失效，请让 Codex 重新发起一次选择。"
-        );
-        return;
-      }
-      await this.choosePendingInteraction({
-        chatId: action.chatId,
-        chatKey: action.chatKey,
-        optionId: action.optionId,
-        silentSuccess: true,
-        target: {
-          chatId: action.chatId,
-          replyToMessageId: action.replyToMessageId
-        }
-      });
-      return;
-    }
-
-    if (action.name === "reset") {
-      await this.handleCommand({
-        chatId: action.chatId,
-        chatKey: action.chatKey,
-        commandText: "/reset",
-        senderOpenId: action.senderOpenId,
-        silentSuccess: true,
-        target: {
-          chatId: action.chatId,
-          replyToMessageId: action.replyToMessageId
-        }
-      });
-    }
+    return this.messageDispatch.dispatchEvent(eventEnvelope);
   }
 
   isBotMentioned(mentions) {
@@ -1839,148 +1369,37 @@ export class BridgeService {
     this.pumpQueue();
   }
 
+  createTaskExecutionContext() {
+    return {
+      autoCommitWorkspace: this.autoCommitWorkspace,
+      buildInteractionText: this.buildInteractionText.bind(this),
+      buildPromptWithMemory: this.buildPromptWithMemory.bind(this),
+      compactConversationContext: this.compactConversationContext.bind(this),
+      config: this.config,
+      ensureTaskNotAborted: this.ensureTaskNotAborted.bind(this),
+      finalizeTask: this.finalizeTask.bind(this),
+      formatAutoCommitResult: this.formatAutoCommitResult.bind(this),
+      formatAutoCommitRollbackResult: this.formatAutoCommitRollbackResult.bind(this),
+      handleRunnerEvent: this.handleRunnerEvent.bind(this),
+      markTaskCompleted,
+      markTaskFailed,
+      markTaskRunning,
+      metrics: this.metrics,
+      parseInteractionRequest,
+      registerPendingInteraction: this.registerPendingInteraction.bind(this),
+      resolveCliProviderName: this.resolveCliProviderName.bind(this),
+      resolveTaskProvider: this.resolveTaskProvider.bind(this),
+      rollbackAutoCommitWorkspace: this.rollbackAutoCommitWorkspace,
+      runtime: this.runtime,
+      safeSend: this.safeSend.bind(this),
+      store: this.store,
+      syncTaskCard: this.syncTaskCard.bind(this),
+      taskOrchestrator: this.taskOrchestrator
+    };
+  }
+
   async runTask(task) {
-    markTaskRunning(task);
-
-    const taskProvider = this.resolveTaskProvider(task.chatKey);
-    const providerSupportsResume =
-      typeof taskProvider.supportsResume === "boolean"
-        ? taskProvider.supportsResume
-        : taskProvider.name === "codex";
-    task.providerName = taskProvider.name || this.resolveCliProviderName(task.chatKey);
-    task.providerSupportsResume = providerSupportsResume;
-    const conversation = this.store.getConversation(task.chatKey);
-    const previousSessionId =
-      task.sessionId ||
-      (conversation?.workspaceDir === task.workspaceDir ? conversation?.sessionId || null : null);
-    const sessionId = providerSupportsResume ? previousSessionId : "";
-    const runner = this.taskOrchestrator.runTask({
-      chatKey: task.chatKey,
-      taskOptions: {
-      onEvent: (event) => {
-        this.handleRunnerEvent(task, event);
-      },
-      prompt: this.buildPromptWithMemory(task.prompt, conversation, task.workspaceDir),
-      sessionId,
-      workspaceDir: task.workspaceDir
-      }
-    });
-
-    task.runner = runner;
-    this.runtime.start(task);
-    task.recovered = false;
-    await this.syncTaskCard(task);
-
-    let autoCommitResult = null;
-    try {
-      const result = await runner.result;
-      await task.streamChain;
-      this.ensureTaskNotAborted(task);
-      const interactionRequest = parseInteractionRequest(result.finalMessage);
-      if (interactionRequest?.error) {
-        throw new Error(interactionRequest.error);
-      }
-
-      const normalizedResult = {
-        ...result,
-        finalMessage:
-          interactionRequest?.cleanedText ||
-          (interactionRequest ? `需要用户选择：${interactionRequest.question}` : result.finalMessage)
-      };
-      markTaskCompleted(task, normalizedResult);
-
-      if (interactionRequest) {
-        const interaction = await this.registerPendingInteraction(
-          task,
-          normalizedResult,
-          interactionRequest
-        );
-        task.finalMessage = `需要用户选择：${interaction.question}`;
-        await this.safeSend(
-          task.target,
-          this.buildInteractionText(interaction, buildTaskName(task))
-        );
-        return;
-      }
-
-      this.store.upsertConversation(task.chatKey, {
-        lastContextUsageRatio: task.contextUsageRatio,
-        lastModelContextWindow: task.modelContextWindow || 0,
-        memoryFilePath: conversation?.memoryFilePath || "",
-        lastSenderOpenId: task.senderOpenId,
-        lastTaskId: task.id,
-        pendingInteraction: null,
-        sessionId: providerSupportsResume ? result.sessionId : "",
-        workspaceDir: task.workspaceDir
-      });
-
-      this.ensureTaskNotAborted(task);
-      autoCommitResult = await this.autoCommitWorkspace(this.config, task);
-      task.autoCommitSummary = this.formatAutoCommitResult(autoCommitResult);
-      let compacted = false;
-      if (!providerSupportsResume && result.sessionId && this.config.contextCompactEnabled) {
-        this.metrics.lastCompactionDecision = "unsupported-provider";
-        this.metrics.lastCompactionTaskId = task.id;
-        this.metrics.lastCompactionUpdatedAt = new Date().toISOString();
-      }
-      if (providerSupportsResume && result.sessionId) {
-        try {
-          this.ensureTaskNotAborted(task);
-          const compactResult = await this.compactConversationContext(task, result.sessionId);
-          compacted = compactResult.performed;
-        } catch (error) {
-          console.error(`[task:${task.id}] context compaction failed:`, error);
-          task.lastProgressText = `上下文压缩失败，将继续沿用当前会话：${error.message || String(error)}`;
-        }
-      }
-      if (compacted) {
-        task.sessionId = "";
-      }
-      this.ensureTaskNotAborted(task);
-      await this.syncTaskCard(task);
-
-      if (!this.config.feishuInteractiveCardsEnabled) {
-        const finalText = [
-          `任务 ${buildTaskName(task)} 已完成。`,
-          task.sessionId ? `session: ${task.sessionId}` : "",
-          `workspace: ${task.workspaceDir}`,
-          task.autoCommitSummary ? `自动提交：${task.autoCommitSummary}` : "",
-          "",
-          task.finalMessage
-        ]
-          .filter(Boolean)
-          .join("\n");
-        for (const chunk of splitText(finalText, this.config.maxReplyChars)) {
-          await this.safeSend(task.target, chunk);
-        }
-      }
-    } catch (error) {
-      await task.streamChain;
-      markTaskFailed(task, error);
-      if (task.abortRequested && autoCommitResult?.status === "committed") {
-        const rollbackResult = await this.rollbackAutoCommitWorkspace(
-          this.config,
-          task,
-          autoCommitResult.commitId
-        );
-        task.autoCommitSummary = this.formatAutoCommitRollbackResult(rollbackResult);
-        console.log(
-          `[task:${task.id}] auto commit rollback result: ${rollbackResult.status}${rollbackResult.reason ? ` (${rollbackResult.reason})` : ""}`
-        );
-      }
-      await this.syncTaskCard(task);
-
-      if (!this.config.feishuInteractiveCardsEnabled) {
-        await this.safeSend(
-          task.target,
-          task.abortRequested
-            ? `任务 ${buildTaskName(task)} 已取消。\n${task.lastErrorMessage}`
-            : [`任务 ${buildTaskName(task)} 执行失败：`, task.lastErrorMessage].join("\n")
-        );
-      }
-    } finally {
-      await this.finalizeTask(task);
-    }
+    await runTaskExecution(this.createTaskExecutionContext(), task);
   }
 
   async safeSend(target, text) {
