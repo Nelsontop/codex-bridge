@@ -110,7 +110,7 @@ function helpText() {
   return [
     "Agent Bridge 命令：",
     "/help 查看帮助",
-    "/bind <目录> [仓库名] 绑定当前群组工作目录并初始化 GitHub 公共仓库",
+    "/bind <目录> [仓库名] 绑定当前群组工作目录；空目录会先拉模板，再准备 Git / GitHub 仓库",
     "/status 查看当前会话、工作目录与任务状态",
     "/reset 清空当前聊天绑定的 Codex 会话，不影响工作目录绑定",
     "/choose <选项ID> 选择当前等待确认的卡片选项",

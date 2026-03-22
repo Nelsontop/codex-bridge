@@ -51,6 +51,9 @@ export class BridgeCommandRouter {
     const lines = [
       `已绑定工作目录：${result.workspaceDir}`,
       `GitHub 仓库：${result.repoName}`,
+      result.templateApplied
+        ? "项目模板：已按 vibe-coding-standard 初始化目录结构"
+        : "项目模板：目录非空，沿用现有内容",
       result.gitInitialized ? "本地仓库：已初始化 Git 仓库" : "本地仓库：沿用现有 Git 仓库",
       result.initialCommitCreated ? "初始化提交：已创建" : "初始化提交：已存在",
       result.remoteStatus === "created"
